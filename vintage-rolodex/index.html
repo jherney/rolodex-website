@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Desk Rolodex</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=Courier+Prime:wght@400;700&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="toolbar">
+    <div class="brass-plate"><span>ROLO</span>·<span>DEX</span></div>
+    <div class="tools">
+      <label class="search">
+        <span class="sr">Search</span>
+        <input id="search" type="search" placeholder="Find a card…" autocomplete="off">
+      </label>
+      <button id="btn-new" class="btn primary" title="New card (N)">+ New Card</button>
+      <button id="btn-sound" class="btn" title="Toggle click sound" aria-pressed="true">🔊</button>
+      <button id="btn-export" class="btn" title="Export contacts as JSON">Export</button>
+      <label class="btn" title="Import contacts from JSON">Import<input id="file-import" type="file" accept=".json,application/json" hidden></label>
+      <span class="status" id="status"></span>
+    </div>
+  </header>
+
+  <main class="desk">
+    <div class="device">
+      <div class="rod"></div>
+      <div class="wheel left"><div class="hub"></div></div>
+      <div class="stage" id="stage" tabindex="-1" aria-label="Rolodex cards. Use arrow keys to flip.">
+        <div class="drum" id="drum"></div>
+      </div>
+      <div class="wheel right" id="knob" title="Drag to spin"><div class="hub"><div class="grip"></div></div></div>
+      <div class="base"><div class="counter" id="counter">0 / 0</div></div>
+    </div>
+
+    <div class="empty-actions" id="empty-actions" hidden>
+      <p>Your rolodex is empty. File your first card, or load a few example cards to try it out.</p>
+      <div class="row">
+        <button type="button" id="btn-first" class="btn primary">+ New Card</button>
+        <button type="button" id="btn-examples" class="btn">Load example cards</button>
+      </div>
+    </div>
+
+    <nav class="tabs" id="tabs" aria-label="Jump to letter"></nav>
+
+    <p class="hint">Scroll, drag, or use ↑ ↓ to flip · type a letter to jump · double-click a card to edit · click a phone or email to copy it</p>
+  </main>
+
+  <dialog id="editor" class="editor">
+    <form method="dialog" id="editor-form" class="index-card form-card">
+      <div class="card-head">
+        <h2 id="editor-title">New Card</h2>
+        <label class="star-toggle"><input type="checkbox" name="starred"><span>★</span></label>
+      </div>
+      <div class="grid">
+        <label>First name<input name="first" autocomplete="off"></label>
+        <label>Last name<input name="last" autocomplete="off"></label>
+        <label>Company<input name="company" autocomplete="off"></label>
+        <label>Title<input name="title" autocomplete="off"></label>
+        <label>Phone<input name="phone" type="tel" autocomplete="off"></label>
+        <label>Email<input name="email" type="email" autocomplete="off"></label>
+        <label class="wide">Address<input name="address" autocomplete="off"></label>
+        <label class="wide">Notes<textarea name="notes" rows="3"></textarea></label>
+      </div>
+      <p class="form-error" id="form-error" role="alert"></p>
+      <div class="actions">
+        <button type="button" id="btn-delete" class="btn danger">Tear Up</button>
+        <span class="spacer"></span>
+        <button type="button" id="btn-cancel" class="btn">Cancel</button>
+        <button type="submit" id="btn-save" class="btn primary">File It</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

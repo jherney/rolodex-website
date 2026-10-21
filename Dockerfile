@@ -21,10 +21,8 @@ COPY sw.js sw.js
 COPY wsgi_entry.py wsgi_entry.py
 COPY gunicorn_config.py gunicorn_config.py
 
-# Vintage desk-rolodex frontend, served at /vintage/. It lives outside this
-# directory, so it comes from a named build context (see docker-compose.yml):
-#   docker build --build-context vintage=../vintage-rolodex .
-COPY --from=vintage index.html app.js styles.css /app/vintage/
+# Vintage desk-rolodex frontend, served at /vintage/
+COPY vintage-rolodex/index.html vintage-rolodex/app.js vintage-rolodex/styles.css /app/vintage/
 ENV ROLODEX_VINTAGE_DIR=/app/vintage
 # Listen on all interfaces inside the container; publish the port to loopback on the host
 ENV ROLODEX_HOST=0.0.0.0

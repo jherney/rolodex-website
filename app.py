@@ -13,7 +13,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONTACTS_PATH = os.path.join(BASE_DIR, 'contacts.json')
 # The vintage desk-rolodex frontend, served at /vintage/ against the same API
 VINTAGE_DIR = os.path.abspath(os.environ.get(
-    'ROLODEX_VINTAGE_DIR', os.path.join(BASE_DIR, '..', 'vintage-rolodex')))
+    'ROLODEX_VINTAGE_DIR', os.path.join(BASE_DIR, 'vintage-rolodex')))
 
 app = Flask(__name__)
 

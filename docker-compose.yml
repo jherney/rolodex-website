@@ -46,8 +46,6 @@ services:
   app:
     build:
       context: .
-      additional_contexts:
-        vintage: ../vintage-rolodex
     container_name: rolodex-app
     ports:
       # Host loopback only: the API has no authentication
