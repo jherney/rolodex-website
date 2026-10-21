@@ -391,7 +391,7 @@ body {
   background: transparent;
   max-width: calc(100vw - 32px);
 }
-.editor::backdrop { background: rgba(20, 12, 5, 0.65); }
+.editor::backdrop { background: rgba(20, 12, 5, 0.65); backdrop-filter: blur(2px); }
 
 .form-card {
   width: 560px;
