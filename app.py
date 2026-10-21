@@ -70,7 +70,11 @@ def handle_options():
 
 # ── Database helpers ───────────────────────────────────────────────────
 
+DATABASE_URL = os.environ.get('DATABASE_URL', '')  # set by hosted Postgres integrations such as Neon on Vercel
+
 def get_db_conn():
+    if DATABASE_URL:
+        return psycopg2.connect(DATABASE_URL)
     return psycopg2.connect(**DB_CONFIG)
 
 def init_db():

@@ -1,0 +1,16 @@
+# Local data, secrets, and tooling are not deployed
+contacts.json
+rolodex-cache/
+.env
+.env.*
+*.log
+*.backup
+tests/
+.github/
+.vercel/
+__pycache__/
+Dockerfile
+docker-compose.yml
+gunicorn_config.py
+migrate_to_postgres.py
+runner.sh

@@ -25,3 +25,7 @@ contacts.json
 *.log
 *.backup
 rolodex-cache/
+
+# Vercel project link
+.vercel
+.env*
