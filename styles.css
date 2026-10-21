@@ -786,7 +786,7 @@ body {
 .panel-title-group {
   flex: 1;
 }
-.panel-title-group h3 {
+.panel-title-group h2 {
   margin: 0 0 0.25rem 0;
   font-size: 1.3rem;
 }
