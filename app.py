@@ -256,7 +256,8 @@ def readiness():
 
 @app.route('/', methods=['GET'])
 def index():
-    return send_from_directory(BASE_DIR, 'index.html')
+    # The vintage desk rolodex is the default page; the original UI is no longer served at /
+    return send_from_directory(VINTAGE_DIR, 'index.html')
 
 @app.route('/app.js', methods=['GET'])
 def app_js():
