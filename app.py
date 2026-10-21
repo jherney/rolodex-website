@@ -4,6 +4,7 @@ import os
 import io
 import csv
 import re
+import urllib.parse
 import urllib.request
 from datetime import datetime
 import psycopg2
@@ -73,9 +74,15 @@ def handle_options():
 # Hosted Postgres integrations on Vercel set POSTGRES_URL (Supabase) or DATABASE_URL (Neon)
 DATABASE_URL = os.environ.get('DATABASE_URL') or os.environ.get('POSTGRES_URL', '')
 
+def _dsn_without_supabase_params(url):
+    # Supabase's pooled URLs carry a `supa` routing parameter that libpq rejects
+    parts = urllib.parse.urlsplit(url)
+    query = [(k, v) for k, v in urllib.parse.parse_qsl(parts.query, keep_blank_values=True) if k != 'supa']
+    return urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(query)))
+
 def get_db_conn():
     if DATABASE_URL:
-        return psycopg2.connect(DATABASE_URL)
+        return psycopg2.connect(_dsn_without_supabase_params(DATABASE_URL))
     return psycopg2.connect(**DB_CONFIG)
 
 def init_db():
