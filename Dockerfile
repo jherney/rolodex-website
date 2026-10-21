@@ -23,6 +23,7 @@ COPY gunicorn_config.py gunicorn_config.py
 
 # Vintage desk-rolodex frontend, served at /vintage/
 COPY vintage-rolodex/index.html vintage-rolodex/app.js vintage-rolodex/styles.css /app/vintage/
+COPY vintage-rolodex/fonts /app/vintage/fonts/
 ENV ROLODEX_VINTAGE_DIR=/app/vintage
 # Listen on all interfaces inside the container; publish the port to loopback on the host
 ENV ROLODEX_HOST=0.0.0.0

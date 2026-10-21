@@ -1,3 +1,10 @@
+/* Fonts are served from this site (no third-party request before first paint).
+   Latin subsets of the Google Fonts files; OFL licence. */
+@font-face { font-family: 'Courier Prime'; font-style: normal; font-weight: 400; font-display: swap; src: url(/vintage/fonts/courier-prime-400.woff2) format('woff2'); }
+@font-face { font-family: 'Courier Prime'; font-style: normal; font-weight: 700; font-display: swap; src: url(/vintage/fonts/courier-prime-700.woff2) format('woff2'); }
+@font-face { font-family: 'Playfair Display'; font-style: normal; font-weight: 700; font-display: swap; src: url(/vintage/fonts/playfair-display-700.woff2) format('woff2'); }
+@font-face { font-family: 'Special Elite'; font-style: normal; font-weight: 400; font-display: swap; src: url(/vintage/fonts/special-elite-400.woff2) format('woff2'); }
+
 :root {
   --wood-1: #5a3a22;
   --wood-2: #6e4729;
