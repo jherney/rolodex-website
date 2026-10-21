@@ -139,6 +139,15 @@ def init_db():
             """)
             cur.execute("ALTER TABLE contacts ADD COLUMN IF NOT EXISTS user_id VARCHAR(255)")
             cur.execute("CREATE INDEX IF NOT EXISTS contacts_user_idx ON contacts (user_id)")
+            # Sign-in throttling counters, one row per email or client IP
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS login_failures (
+                    key VARCHAR(320) PRIMARY KEY,
+                    failures INTEGER NOT NULL,
+                    window_start TIMESTAMPTZ NOT NULL,
+                    locked_until TIMESTAMPTZ
+                )
+            """)
             # Per-contact reminders and activity log. contact_id has no foreign key on purpose:
             # /save_contacts truncates contacts, and a cascade would wipe these rows with it.
             # Routes that delete or merge contacts remove or move these rows explicitly.
@@ -361,6 +370,66 @@ def api_signup():
     session['uid'] = uid
     return jsonify({'email': email}), 201
 
+# Sign-in throttling: failed passwords per email and per client IP. Five failures for one
+# email, or twenty from one IP, lock that key for 15 minutes. Counts live in Postgres so every
+# server instance sees the same lockouts.
+LOGIN_WINDOW = '15 minutes'
+LOGIN_LIMITS = {'email': 5, 'ip': 20}
+
+def _client_ip():
+    # Vercel and most proxies put the client address first in X-Forwarded-For
+    forwarded = request.headers.get('X-Forwarded-For', '')
+    return forwarded.split(',')[0].strip() or (request.remote_addr or 'unknown')
+
+def _login_keys(email):
+    return [f'email:{email}', f'ip:{_client_ip()}']
+
+def _login_locked(keys):
+    conn = get_db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM login_failures WHERE key = ANY(%s) AND locked_until > now()", (keys,))
+            return cur.fetchone() is not None
+    finally:
+        conn.close()
+
+def _record_login_failure(keys):
+    conn = get_db_conn()
+    try:
+        with conn.cursor() as cur:
+            for key, kind in zip(keys, ('email', 'ip')):
+                limit = LOGIN_LIMITS[kind]
+                # A failure after the window has passed starts a new count
+                cur.execute(
+                    f"""
+                    INSERT INTO login_failures (key, failures, window_start, locked_until)
+                    VALUES (%s, 1, now(), CASE WHEN 1 >= %s THEN now() + interval '{LOGIN_WINDOW}' END)
+                    ON CONFLICT (key) DO UPDATE SET
+                      failures = CASE WHEN login_failures.window_start < now() - interval '{LOGIN_WINDOW}'
+                                      THEN 1 ELSE login_failures.failures + 1 END,
+                      window_start = CASE WHEN login_failures.window_start < now() - interval '{LOGIN_WINDOW}'
+                                          THEN now() ELSE login_failures.window_start END,
+                      locked_until = CASE WHEN (CASE WHEN login_failures.window_start < now() - interval '{LOGIN_WINDOW}'
+                                                     THEN 1 ELSE login_failures.failures + 1 END) >= %s
+                                          THEN now() + interval '{LOGIN_WINDOW}'
+                                          ELSE login_failures.locked_until END
+                    """,
+                    (key, limit, limit))
+            # Forget counters that are long finished, so the table stays small
+            cur.execute(f"DELETE FROM login_failures WHERE window_start < now() - interval '1 day'")
+        conn.commit()
+    finally:
+        conn.close()
+
+def _clear_login_failures(keys):
+    conn = get_db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM login_failures WHERE key = %s", (keys[0],))
+        conn.commit()
+    finally:
+        conn.close()
+
 @app.route('/api/v1/auth/login', methods=['POST'])
 def api_login():
     data = request.get_json(silent=True)
@@ -368,6 +437,10 @@ def api_login():
         return jsonify({'error': 'expected a JSON object'}), 400
     email = _text(data, 'email').lower()
     password = _password_from(data)
+    keys = _login_keys(email)
+    if _login_locked(keys):
+        return jsonify({'error': 'too many failed sign-in attempts; try again in 15 minutes'}), 429
+
     conn = get_db_conn()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -376,8 +449,10 @@ def api_login():
     finally:
         conn.close()
     if not row or not check_password_hash(row['password_hash'], password):
+        _record_login_failure(keys)
         return jsonify({'error': 'email or password is incorrect'}), 401
 
+    _clear_login_failures(keys)
     session.clear()
     session.permanent = True
     session['uid'] = row['id']
