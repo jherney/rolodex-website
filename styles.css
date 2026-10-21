@@ -494,6 +494,7 @@ body {
   margin: 0;
   border: none;
   background: transparent;
+  color: var(--text-primary);
   z-index: 1000;
   padding: 1rem;
 }
