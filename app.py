@@ -465,9 +465,10 @@ def api_logout():
 
 @app.route('/api/v1/auth/me', methods=['GET'])
 def api_me():
+    # Always 200: a signed-out visitor is a normal state, not an error, so the browser logs nothing
     uid = current_user_id()
     if not uid:
-        return jsonify({'error': 'login required'}), 401
+        return jsonify({'email': None})
     conn = get_db_conn()
     try:
         with conn.cursor() as cur:
@@ -477,7 +478,7 @@ def api_me():
         conn.close()
     if not row:
         session.clear()
-        return jsonify({'error': 'login required'}), 401
+        return jsonify({'email': None})
     return jsonify({'email': row[0]})
 
 @app.route('/get_contacts', methods=['GET'])

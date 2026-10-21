@@ -158,12 +158,12 @@
     let me;
     try {
       me = await api('GET', '/api/v1/auth/me');
-    } catch (err) {
-      if (err.status === 401) return; // showSignIn has already run
+    } catch {
       useLocal();
       setStatus('Server unreachable · saved in this browser');
       return;
     }
+    if (!me.email) return showSignIn('');
     try {
       const rows = await api('GET', API);
       store.mode = 'server';
