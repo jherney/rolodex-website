@@ -13,7 +13,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY app.py app.py
-COPY contacts.json contacts.json
 COPY index.html index.html
 COPY app.js app.js
 COPY styles.css styles.css
