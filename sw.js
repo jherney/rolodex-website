@@ -1,5 +1,5 @@
 // Rolodex Service Worker — Offline-First PWA
-const CACHE_NAME = 'rolodex-v13';
+const CACHE_NAME = 'rolodex-v14';
 const ASSETS = [
   '/',
   '/vintage/styles.css',
@@ -31,17 +31,9 @@ self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
 
-  // API calls: network first, fallback to cache
+  // API calls are never cached or served from cache: they are per-account data, and a cached
+  // copy could show one account's cards to the next person who signs in on this browser
   if (url.pathname.startsWith('/api/') || url.pathname === '/get_contacts' || url.pathname === '/save_contacts') {
-    event.respondWith(
-      fetch(event.request)
-        .then(resp => {
-          const clone = resp.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
-          return resp;
-        })
-        .catch(() => caches.match(event.request))
-    );
     return;
   }
 

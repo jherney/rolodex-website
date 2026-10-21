@@ -1,6 +1,9 @@
-from flask import Flask, jsonify, request, send_from_directory, send_file, redirect
+from flask import Flask, jsonify, request, send_from_directory, send_file, redirect, session
+from functools import wraps
+from werkzeug.security import generate_password_hash, check_password_hash
 import json
 import os
+import secrets
 import io
 import csv
 import re
@@ -24,10 +27,20 @@ PORT = int(os.environ.get('ROLODEX_PORT', '5000'))
 # Loopback by default: the API has no authentication, so don't expose it to the network
 HOST = os.environ.get('ROLODEX_HOST', '127.0.0.1')
 DEBUG = os.environ.get('ROLODEX_DEBUG', '0').lower() in ('1', 'true', 'yes')
-SECRET_KEY = os.environ.get('ROLODEX_SECRET_KEY', 'change-this-in-production')
+# Signs the session cookie. Required on Vercel (serverless instances must share it);
+# locally a random key is generated, so sessions end when the server restarts.
+SECRET_KEY = os.environ.get('ROLODEX_SECRET_KEY', '')
+if not SECRET_KEY:
+    if os.environ.get('VERCEL') or os.environ.get('ROLODEX_ENV') == 'production':
+        raise RuntimeError('ROLODEX_SECRET_KEY must be set in production')
+    SECRET_KEY = secrets.token_hex(32)
 # Empty = same-origin only (both bundled frontends are served by this app)
 CORS_ORIGIN = os.environ.get('ROLODEX_CORS_ORIGIN', '')
 app.secret_key = SECRET_KEY
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = bool(os.environ.get('VERCEL') or os.environ.get('ROLODEX_SECURE_COOKIES'))
+app.config['PERMANENT_SESSION_LIFETIME'] = 30 * 24 * 3600
 
 # PostgreSQL configuration
 DB_CONFIG = {
@@ -114,6 +127,18 @@ def init_db():
             # Added for the vintage rolodex frontend; optional for other clients
             cur.execute("ALTER TABLE contacts ADD COLUMN IF NOT EXISTS company VARCHAR(255) DEFAULT ''")
             cur.execute("ALTER TABLE contacts ADD COLUMN IF NOT EXISTS title VARCHAR(255) DEFAULT ''")
+            # Accounts. Each contact belongs to one user; contacts saved before accounts existed
+            # have no user_id and are not visible to anyone.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id VARCHAR(255) PRIMARY KEY,
+                    email VARCHAR(255) UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    created_at TIMESTAMP NOT NULL
+                )
+            """)
+            cur.execute("ALTER TABLE contacts ADD COLUMN IF NOT EXISTS user_id VARCHAR(255)")
+            cur.execute("CREATE INDEX IF NOT EXISTS contacts_user_idx ON contacts (user_id)")
             # Per-contact reminders and activity log. contact_id has no foreign key on purpose:
             # /save_contacts truncates contacts, and a cascade would wipe these rows with it.
             # Routes that delete or merge contacts remove or move these rows explicitly.
@@ -156,6 +181,17 @@ def _text(data, key):
     value = data.get(key)
     return value.strip() if isinstance(value, str) else ''
 
+def current_user_id():
+    return session.get('uid')
+
+def login_required(view):
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        if not current_user_id():
+            return jsonify({'error': 'login required'}), 401
+        return view(*args, **kwargs)
+    return wrapper
+
 def _row_to_dict(row):
     """Convert a RealDictRow to a plain dict with camelCase keys for createdAt/updatedAt."""
     d = dict(row)
@@ -171,29 +207,29 @@ def _row_to_dict(row):
         d['linked_contacts'] = json.loads(d['linked_contacts']) if d['linked_contacts'] else []
     return d
 
-def load_contacts():
+def load_contacts(uid):
     conn = get_db_conn()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute("SELECT * FROM contacts ORDER BY created_at")
+            cur.execute("SELECT * FROM contacts WHERE user_id = %s ORDER BY created_at", (uid,))
             rows = cur.fetchall()
             return [_row_to_dict(r) for r in rows]
     finally:
         conn.close()
 
-def save_contacts(contacts):
-    """Legacy atomic write: truncate and insert all (used by /save_contacts)."""
+def save_contacts(contacts, uid):
+    """Legacy atomic write: replace this user's contacts with the given list (used by /save_contacts and merge)."""
     conn = get_db_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM contacts")
+            cur.execute("DELETE FROM contacts WHERE user_id = %s", (uid,))
             for c in contacts:
                 cur.execute(
                     """
                     INSERT INTO contacts
                     (id, name, phone, email, address, tags, notes, avatar, birthday,
-                     social, linked_contacts, starred, created_at, updated_at, company, title)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     social, linked_contacts, starred, created_at, updated_at, company, title, user_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         c.get('id'),
@@ -211,7 +247,8 @@ def save_contacts(contacts):
                         c.get('createdAt', datetime.now().isoformat()),
                         c.get('updatedAt', datetime.now().isoformat()),
                         c.get('company', ''),
-                        c.get('title', '')
+                        c.get('title', ''),
+                        uid,
                     )
                 )
         conn.commit()
@@ -245,10 +282,9 @@ def readiness():
     try:
         conn = get_db_conn()
         with conn.cursor() as cur:
-            cur.execute('SELECT COUNT(*) FROM contacts')
-            count = cur.fetchone()[0]
+            cur.execute('SELECT 1')
         conn.close()
-        return jsonify({'status': 'ready', 'contact_count': count})
+        return jsonify({'status': 'ready'})
     except Exception as e:
         return jsonify({'status': 'not_ready', 'error': str(e)}), 503
 
@@ -286,23 +322,110 @@ def vintage(path):
 
 # ── Legacy endpoints (backward compat) ─────────────────────────────────
 
+# ── Accounts ────────────────────────────────────────────────────────────
+
+_EMAIL_RE = re.compile(r'^[^\s@]+@[^\s@]+\.[^\s@]+$')
+
+def _password_from(data):
+    return data.get('password') if isinstance(data.get('password'), str) else ''
+
+@app.route('/api/v1/auth/signup', methods=['POST'])
+def api_signup():
+    """Create an account and sign in. Anyone can sign up; each account sees only its own contacts."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'error': 'expected a JSON object'}), 400
+    email = _text(data, 'email').lower()
+    password = _password_from(data)
+    if not _EMAIL_RE.match(email):
+        return jsonify({'error': 'enter a valid email address'}), 400
+    if len(password) < 10:
+        return jsonify({'error': 'password must be at least 10 characters'}), 400
+
+    uid = _new_id()
+    conn = get_db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO users (id, email, password_hash, created_at) VALUES (%s, %s, %s, %s)",
+                (uid, email, generate_password_hash(password), datetime.now()))
+        conn.commit()
+    except psycopg2.IntegrityError:
+        conn.rollback()
+        return jsonify({'error': 'an account with this email already exists'}), 409
+    finally:
+        conn.close()
+
+    session.clear()
+    session.permanent = True
+    session['uid'] = uid
+    return jsonify({'email': email}), 201
+
+@app.route('/api/v1/auth/login', methods=['POST'])
+def api_login():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'error': 'expected a JSON object'}), 400
+    email = _text(data, 'email').lower()
+    password = _password_from(data)
+    conn = get_db_conn()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT id, email, password_hash FROM users WHERE email = %s", (email,))
+            row = cur.fetchone()
+    finally:
+        conn.close()
+    if not row or not check_password_hash(row['password_hash'], password):
+        return jsonify({'error': 'email or password is incorrect'}), 401
+
+    session.clear()
+    session.permanent = True
+    session['uid'] = row['id']
+    return jsonify({'email': row['email']})
+
+@app.route('/api/v1/auth/logout', methods=['POST'])
+def api_logout():
+    session.clear()
+    return jsonify({'status': 'ok'})
+
+@app.route('/api/v1/auth/me', methods=['GET'])
+def api_me():
+    uid = current_user_id()
+    if not uid:
+        return jsonify({'error': 'login required'}), 401
+    conn = get_db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT email FROM users WHERE id = %s", (uid,))
+            row = cur.fetchone()
+    finally:
+        conn.close()
+    if not row:
+        session.clear()
+        return jsonify({'error': 'login required'}), 401
+    return jsonify({'email': row[0]})
+
 @app.route('/get_contacts', methods=['GET'])
+@login_required
 def get_contacts():
-    return jsonify(load_contacts())
+    return jsonify(load_contacts(current_user_id()))
 
 @app.route('/save_contacts', methods=['POST'])
+@login_required
 def save_contacts_legacy():
     data = request.get_json(silent=True)
     if not isinstance(data, list):
         return jsonify({'error': 'expected a JSON list of contacts'}), 400
-    save_contacts(data)
+    save_contacts(data, current_user_id())
     return jsonify({'status': 'ok', 'count': len(data)})
 
 # ── API v1 endpoints ───────────────────────────────────────────────────
 
 @app.route('/api/v1/contacts', methods=['GET'])
+@login_required
 def api_get_contacts():
-    """Get all contacts. Supports ?search= and ?tag= filtering."""
+    """Get the signed-in user's contacts. Supports ?search= and ?tag= filtering."""
+    uid = current_user_id()
     search = request.args.get('search', '').strip().lower()
     tag_filter = request.args.get('tag', '').strip().lower()
 
@@ -314,21 +437,22 @@ def api_get_contacts():
                 cur.execute(
                     """
                     SELECT * FROM contacts
-                    WHERE EXISTS (SELECT 1 FROM jsonb_array_elements_text(tags) t WHERE LOWER(t) = %s)
+                    WHERE user_id = %s
+                      AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(tags) t WHERE LOWER(t) = %s)
                     ORDER BY created_at
                     """,
-                    (tag_filter,)
+                    (uid, tag_filter)
                 )
             elif search:
                 # Every word must appear in some field (name, phone, email, address, notes, tags, company, title)
                 terms = search.split()
                 searchable = "LOWER(CONCAT_WS(' ', name, phone, email, address, notes, tags::text, company, title))"
                 cur.execute(
-                    f"SELECT * FROM contacts WHERE {' AND '.join([searchable + ' LIKE %s'] * len(terms))} ORDER BY created_at",
-                    [f'%{term}%' for term in terms]
+                    f"SELECT * FROM contacts WHERE user_id = %s AND {' AND '.join([searchable + ' LIKE %s'] * len(terms))} ORDER BY created_at",
+                    [uid] + [f'%{term}%' for term in terms]
                 )
             else:
-                cur.execute("SELECT * FROM contacts ORDER BY created_at")
+                cur.execute("SELECT * FROM contacts WHERE user_id = %s ORDER BY created_at", (uid,))
             rows = cur.fetchall()
     finally:
         conn.close()
@@ -336,6 +460,7 @@ def api_get_contacts():
     return jsonify([_row_to_dict(r) for r in rows])
 
 @app.route('/api/v1/contacts', methods=['POST'])
+@login_required
 def api_add_contact():
     """Add a new contact."""
     data = request.get_json(silent=True)
@@ -368,8 +493,8 @@ def api_add_contact():
                 """
                 INSERT INTO contacts
                 (id, name, phone, email, address, tags, notes, avatar, birthday,
-                 social, linked_contacts, starred, created_at, updated_at, company, title)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 social, linked_contacts, starred, created_at, updated_at, company, title, user_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     contact['id'],
@@ -387,7 +512,8 @@ def api_add_contact():
                     contact['createdAt'],
                     contact['updatedAt'],
                     contact['company'],
-                    contact['title']
+                    contact['title'],
+                    current_user_id(),
                 )
             )
         conn.commit()
@@ -400,8 +526,9 @@ def api_add_contact():
     return jsonify({'status': 'ok', 'contact': contact}), 201
 
 @app.route('/api/v1/contacts/<contact_id>', methods=['PUT'])
+@login_required
 def api_update_contact(contact_id):
-    """Update a contact."""
+    """Update one of the signed-in user's contacts."""
     data = request.get_json(silent=True)
     if not isinstance(data, dict) or not data:
         return jsonify({'error': 'no data'}), 400
@@ -430,9 +557,10 @@ def api_update_contact(contact_id):
             fields.append("updated_at = %s")
             params.append(datetime.now().isoformat())
             params.append(contact_id)
+            params.append(current_user_id())
 
             cur.execute(
-                f"UPDATE contacts SET {', '.join(fields)} WHERE id = %s RETURNING *",
+                f"UPDATE contacts SET {', '.join(fields)} WHERE id = %s AND user_id = %s RETURNING *",
                 params
             )
             row = cur.fetchone()
@@ -445,22 +573,26 @@ def api_update_contact(contact_id):
     return jsonify({'status': 'ok', 'contact': _row_to_dict(row)})
 
 @app.route('/api/v1/contacts/<contact_id>', methods=['DELETE'])
+@login_required
 def api_delete_contact(contact_id):
-    """Delete a contact."""
+    """Delete one of the signed-in user's contacts, with its reminders and activity."""
     conn = get_db_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM contacts WHERE id = %s", (contact_id,))
-            cur.execute("DELETE FROM reminders WHERE contact_id = %s", (contact_id,))
-            cur.execute("DELETE FROM activities WHERE contact_id = %s", (contact_id,))
+            cur.execute("DELETE FROM contacts WHERE id = %s AND user_id = %s", (contact_id, current_user_id()))
+            # Only remove child rows whose contact is gone; a contact owned by someone else still exists
+            cur.execute("DELETE FROM reminders r WHERE r.contact_id = %s AND NOT EXISTS (SELECT 1 FROM contacts c WHERE c.id = r.contact_id)", (contact_id,))
+            cur.execute("DELETE FROM activities a WHERE a.contact_id = %s AND NOT EXISTS (SELECT 1 FROM contacts c WHERE c.id = a.contact_id)", (contact_id,))
         conn.commit()
     finally:
         conn.close()
     return jsonify({'status': 'ok'})
 
 @app.route('/api/v1/bulk', methods=['POST'])
+@login_required
 def api_bulk():
-    """Bulk operations: delete, tag, untag, export."""
+    """Bulk operations on the signed-in user's contacts: delete, tag, untag, export."""
+    uid = current_user_id()
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return jsonify({'error': 'expected a JSON object'}), 400
@@ -473,12 +605,9 @@ def api_bulk():
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             if action == 'delete':
-                cur.execute(
-                    "DELETE FROM contacts WHERE id = ANY(%s)",
-                    (ids,)
-                )
-                cur.execute("DELETE FROM reminders WHERE contact_id = ANY(%s)", (ids,))
-                cur.execute("DELETE FROM activities WHERE contact_id = ANY(%s)", (ids,))
+                cur.execute("DELETE FROM contacts WHERE id = ANY(%s) AND user_id = %s", (ids, uid))
+                cur.execute("DELETE FROM reminders r WHERE r.contact_id = ANY(%s) AND NOT EXISTS (SELECT 1 FROM contacts c WHERE c.id = r.contact_id)", (ids,))
+                cur.execute("DELETE FROM activities a WHERE a.contact_id = ANY(%s) AND NOT EXISTS (SELECT 1 FROM contacts c WHERE c.id = a.contact_id)", (ids,))
                 conn.commit()
                 return jsonify({'status': 'ok', 'deleted': len(ids)})
 
@@ -495,9 +624,9 @@ def api_bulk():
                             FROM jsonb_array_elements(tags || %s) x
                         ),
                         updated_at = %s
-                        WHERE id = %s
+                        WHERE id = %s AND user_id = %s
                         """,
-                        (json.dumps([tag]), datetime.now().isoformat(), cid)
+                        (json.dumps([tag]), datetime.now().isoformat(), cid, uid)
                     )
                 conn.commit()
                 return jsonify({'status': 'ok', 'tagged': tag})
@@ -516,17 +645,17 @@ def api_bulk():
                             WHERE x != %s::jsonb
                         ), '[]'::jsonb),
                         updated_at = %s
-                        WHERE id = %s
+                        WHERE id = %s AND user_id = %s
                         """,
-                        (json.dumps(tag), datetime.now().isoformat(), cid)
+                        (json.dumps(tag), datetime.now().isoformat(), cid, uid)
                     )
                 conn.commit()
                 return jsonify({'status': 'ok', 'untagged': tag})
 
             elif action == 'export':
                 cur.execute(
-                    "SELECT * FROM contacts WHERE id = ANY(%s)",
-                    (ids,)
+                    "SELECT * FROM contacts WHERE id = ANY(%s) AND user_id = %s",
+                    (ids, uid)
                 )
                 rows = cur.fetchall()
                 selected = [_row_to_dict(r) for r in rows]
@@ -556,13 +685,14 @@ def _first_names_compatible(a_name, b_name):
     return a_first.startswith(b_first) or b_first.startswith(a_first)
 
 @app.route('/api/v1/duplicates', methods=['GET'])
+@login_required
 def api_duplicates():
     """Detect potential duplicate contacts using fuzzy name/email/phone matching."""
     try:
         threshold = float(request.args.get('threshold', '0.7'))
     except ValueError:
         return jsonify({'error': 'threshold must be a number'}), 400
-    contacts = load_contacts()
+    contacts = load_contacts(current_user_id())
     duplicates = []
 
     for i, a in enumerate(contacts):
@@ -609,6 +739,7 @@ def api_duplicates():
 # ── Import/Export ──────────────────────────────────────────────────────
 
 @app.route('/api/v1/import', methods=['POST'])
+@login_required
 def api_import():
     """Import contacts from JSON, CSV, or vCard format."""
     file = request.files.get('file')
@@ -658,43 +789,51 @@ def api_import():
     if not imported:
         return jsonify({'error': 'no valid contacts found in file'}), 400
 
-    # Merge with existing
+    # Merge with existing: skip contacts this user already has. An id held by another
+    # account is replaced with a fresh one so the import never touches their data.
+    uid = current_user_id()
     conn = get_db_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT id FROM contacts")
+            cur.execute("SELECT id FROM contacts WHERE user_id = %s", (uid,))
             existing_ids = {r[0] for r in cur.fetchall()}
+            cur.execute("SELECT id FROM contacts WHERE id = ANY(%s)", ([c['id'] for c in imported],))
+            taken_ids = {r[0] for r in cur.fetchall()}
             new_count = 0
             for c in imported:
-                if c['id'] not in existing_ids:
-                    cur.execute(
-                        """
-                        INSERT INTO contacts
-                        (id, name, phone, email, address, tags, notes, avatar, birthday,
-                         social, linked_contacts, starred, created_at, updated_at, company, title)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        """,
-                        (
-                            c['id'],
-                            c.get('name', ''),
-                            c.get('phone', ''),
-                            c.get('email', ''),
-                            c.get('address', ''),
-                            json.dumps(c.get('tags', [])),
-                            c.get('notes', ''),
-                            c.get('avatar', ''),
-                            c.get('birthday', ''),
-                            json.dumps(c.get('social', {})),
-                            json.dumps(c.get('linked_contacts', [])),
-                            bool(c.get('starred', False)),
-                            c.get('createdAt', datetime.now().isoformat()),
-                            c.get('updatedAt', datetime.now().isoformat()),
-                            c.get('company', ''),
-                            c.get('title', '')
-                        )
+                if c['id'] in existing_ids:
+                    continue
+                if c['id'] in taken_ids:
+                    c['id'] = _new_id()
+                cur.execute(
+                    """
+                    INSERT INTO contacts
+                    (id, name, phone, email, address, tags, notes, avatar, birthday,
+                     social, linked_contacts, starred, created_at, updated_at, company, title, user_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        c['id'],
+                        c.get('name', ''),
+                        c.get('phone', ''),
+                        c.get('email', ''),
+                        c.get('address', ''),
+                        json.dumps(c.get('tags', [])),
+                        c.get('notes', ''),
+                        c.get('avatar', ''),
+                        c.get('birthday', ''),
+                        json.dumps(c.get('social', {})),
+                        json.dumps(c.get('linked_contacts', [])),
+                        bool(c.get('starred', False)),
+                        c.get('createdAt', datetime.now().isoformat()),
+                        c.get('updatedAt', datetime.now().isoformat()),
+                        c.get('company', ''),
+                        c.get('title', ''),
+                        uid,
                     )
-                    existing_ids.add(c['id'])
-                    new_count += 1
+                )
+                existing_ids.add(c['id'])
+                new_count += 1
         conn.commit()
     except Exception as e:
         conn.rollback()
@@ -838,6 +977,7 @@ def export_vcard(contacts):
 # ── Fireworks AI Integration ────────────────────────────────────────────
 
 @app.route('/api/v1/ai/enrich', methods=['POST'])
+@login_required
 def ai_enrich():
     """Use Fireworks AI to enrich a contact: suggest tags, find duplicates."""
     data = request.get_json(silent=True)
@@ -913,9 +1053,10 @@ def extract_json(text):
 
 
 @app.route('/api/v1/ai/auto-categorize', methods=['POST'])
+@login_required
 def ai_auto_categorize():
     """Auto-categorize all untagged contacts."""
-    contacts = load_contacts()
+    contacts = load_contacts(current_user_id())
     untagged = [c for c in contacts if not c.get('tags')]
 
     if not untagged:
@@ -977,8 +1118,8 @@ def ai_auto_categorize():
             for contact in untagged[:10]:
                 if contact.get('tags'):
                     cur.execute(
-                        "UPDATE contacts SET tags = %s, updated_at = %s WHERE id = %s",
-                        (json.dumps(contact['tags']), contact['updatedAt'], contact['id'])
+                        "UPDATE contacts SET tags = %s, updated_at = %s WHERE id = %s AND user_id = %s",
+                        (json.dumps(contact['tags']), contact['updatedAt'], contact['id'], current_user_id())
                     )
         conn.commit()
     finally:
@@ -988,6 +1129,7 @@ def ai_auto_categorize():
 
 
 @app.route('/api/v1/ai/search', methods=['POST'])
+@login_required
 def ai_search():
     """Natural language search using AI."""
     data = request.get_json(silent=True)
@@ -995,7 +1137,7 @@ def ai_search():
     if not query:
         return jsonify({'error': 'query required'}), 400
 
-    contacts = load_contacts()
+    contacts = load_contacts(current_user_id())
     if not contacts:
         return jsonify([])
 
@@ -1062,12 +1204,13 @@ def ai_search():
 # ── Tags discovery ──────────────────────────────────────────────────────
 
 @app.route('/api/v1/tags', methods=['GET'])
+@login_required
 def api_tags():
     """Get all unique tags across contacts."""
     conn = get_db_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT tags FROM contacts")
+            cur.execute("SELECT tags FROM contacts WHERE user_id = %s", (current_user_id(),))
             all_tags = {}
             for row in cur.fetchall():
                 tags = row[0]
@@ -1088,6 +1231,7 @@ def api_tags():
 # ── Merge ──────────────────────────────────────────────────────────────
 
 @app.route('/api/v1/merge', methods=['POST'])
+@login_required
 def api_merge():
     """Merge two contacts: keep all data from primary, overwrite with secondary's non-empty fields, then delete secondary."""
     data = request.get_json(silent=True)
@@ -1097,7 +1241,7 @@ def api_merge():
         # Merging a contact into itself would delete it
         return jsonify({'error': 'cannot merge a contact with itself'}), 400
 
-    contacts = load_contacts()
+    contacts = load_contacts(current_user_id())
     primary = next((c for c in contacts if c['id'] == data['primary_id']), None)
     secondary = next((c for c in contacts if c['id'] == data['secondary_id']), None)
 
@@ -1146,7 +1290,7 @@ def api_merge():
         conn.close()
 
     # Persist to DB
-    save_contacts(contacts)
+    save_contacts(contacts, current_user_id())
     return jsonify({'status': 'ok', 'contact': primary})
 
 
@@ -1168,65 +1312,79 @@ def _db_rows(sql, params=()):
     return rows
 
 @app.route('/api/v1/contacts/<contact_id>/reminders', methods=['GET'])
+@login_required
 def api_get_reminders(contact_id):
     rows = _db_rows(
-        "SELECT id, contact_id, title, description, due_date, completed, created_at "
-        "FROM reminders WHERE contact_id = %s ORDER BY completed, due_date, created_at",
-        (contact_id,))
+        "SELECT r.id, r.contact_id, r.title, r.description, r.due_date, r.completed, r.created_at "
+        "FROM reminders r JOIN contacts c ON c.id = r.contact_id "
+        "WHERE r.contact_id = %s AND c.user_id = %s "
+        "ORDER BY r.completed, r.due_date, r.created_at",
+        (contact_id, current_user_id()))
     return jsonify({'reminders': rows})
 
 @app.route('/api/v1/contacts/<contact_id>/reminders', methods=['POST'])
+@login_required
 def api_add_reminder(contact_id):
     data = request.get_json(silent=True)
     if not isinstance(data, dict) or not _text(data, 'title') or not _text(data, 'due_date'):
         return jsonify({'error': 'title and due_date are required'}), 400
-    # The WHERE EXISTS makes an unknown contact return no row, so no FK is needed
+    # The WHERE clause only matches a contact the signed-in user owns, so others return no row
     rows = _db_rows(
         "INSERT INTO reminders (id, contact_id, title, description, due_date, completed, created_at) "
-        "SELECT %s, id, %s, %s, %s, FALSE, %s FROM contacts WHERE id = %s "
+        "SELECT %s, id, %s, %s, %s, FALSE, %s FROM contacts WHERE id = %s AND user_id = %s "
         "RETURNING id, contact_id, title, description, due_date, completed, created_at",
         (_new_id(), _text(data, 'title'), _text(data, 'description'), _text(data, 'due_date'),
-         datetime.now(), contact_id))
+         datetime.now(), contact_id, current_user_id()))
     if not rows:
         return jsonify({'error': 'contact not found'}), 404
     return jsonify(rows[0]), 201
 
 @app.route('/api/v1/reminders/<reminder_id>/complete', methods=['POST'])
+@login_required
 def api_complete_reminder(reminder_id):
     rows = _db_rows(
         "UPDATE reminders SET completed = TRUE WHERE id = %s "
+        "AND contact_id IN (SELECT id FROM contacts WHERE user_id = %s) "
         "RETURNING id, contact_id, title, description, due_date, completed, created_at",
-        (reminder_id,))
+        (reminder_id, current_user_id()))
     if not rows:
         return jsonify({'error': 'reminder not found'}), 404
     return jsonify(rows[0])
 
 @app.route('/api/v1/reminders/<reminder_id>', methods=['DELETE'])
+@login_required
 def api_delete_reminder(reminder_id):
-    rows = _db_rows("DELETE FROM reminders WHERE id = %s RETURNING id", (reminder_id,))
+    rows = _db_rows(
+        "DELETE FROM reminders WHERE id = %s "
+        "AND contact_id IN (SELECT id FROM contacts WHERE user_id = %s) RETURNING id",
+        (reminder_id, current_user_id()))
     if not rows:
         return jsonify({'error': 'reminder not found'}), 404
     return jsonify({'status': 'ok'})
 
 @app.route('/api/v1/contacts/<contact_id>/activities', methods=['GET'])
+@login_required
 def api_get_activities(contact_id):
     rows = _db_rows(
-        "SELECT id, contact_id, type, subject, notes, timestamp, created_at "
-        "FROM activities WHERE contact_id = %s ORDER BY timestamp DESC, created_at DESC",
-        (contact_id,))
+        "SELECT a.id, a.contact_id, a.type, a.subject, a.notes, a.timestamp, a.created_at "
+        "FROM activities a JOIN contacts c ON c.id = a.contact_id "
+        "WHERE a.contact_id = %s AND c.user_id = %s "
+        "ORDER BY a.timestamp DESC, a.created_at DESC",
+        (contact_id, current_user_id()))
     return jsonify({'activities': rows})
 
 @app.route('/api/v1/contacts/<contact_id>/activities', methods=['POST'])
+@login_required
 def api_add_activity(contact_id):
     data = request.get_json(silent=True)
     if not isinstance(data, dict) or not _text(data, 'type') or not _text(data, 'subject'):
         return jsonify({'error': 'type and subject are required'}), 400
     rows = _db_rows(
         "INSERT INTO activities (id, contact_id, type, subject, notes, timestamp, created_at) "
-        "SELECT %s, id, %s, %s, %s, %s, %s FROM contacts WHERE id = %s "
+        "SELECT %s, id, %s, %s, %s, %s, %s FROM contacts WHERE id = %s AND user_id = %s "
         "RETURNING id, contact_id, type, subject, notes, timestamp, created_at",
         (_new_id(), _text(data, 'type'), _text(data, 'subject'), _text(data, 'notes'),
-         _text(data, 'timestamp') or datetime.now().isoformat(), datetime.now(), contact_id))
+         _text(data, 'timestamp') or datetime.now().isoformat(), datetime.now(), contact_id, current_user_id()))
     if not rows:
         return jsonify({'error': 'contact not found'}), 404
     return jsonify(rows[0]), 201

@@ -59,6 +59,7 @@
       headers: body ? { 'Content-Type': 'application/json' } : {},
       body: body ? JSON.stringify(body) : undefined,
     });
+    if (res.status === 401) showSignIn('');
     if (!res.ok) {
       const err = new Error(`${method} ${path} failed: ${res.status}`);
       err.status = res.status;
@@ -93,6 +94,7 @@
     mode: 'local',
     col: null,
     async put(list) {
+      if (this.mode === 'signedout') return;
       if (this.mode === 'local') return saveLocal();
       for (const c of list) {
         if (this.mode === 'server') {
@@ -109,6 +111,7 @@
       }
     },
     async remove(id) {
+      if (this.mode === 'signedout') return;
       if (this.mode === 'local') return saveLocal();
       if (this.mode === 'server') return api('DELETE', `${API}/${encodeURIComponent(id)}`);
       await this.col.doc(id).delete();
@@ -138,20 +141,78 @@
     rebuild();
   }
 
+  // Signed-out visitors see no cards. The sign-in dialog is the only thing they can use.
+  function showSignIn(message) {
+    store.mode = 'signedout';
+    contacts = [];
+    loading = false;
+    rebuild();
+    setStatus('Sign in to see your cards');
+    $('#btn-signout').hidden = true;
+    $('#auth-error').textContent = message;
+    if (!$('#auth').open) $('#auth').showModal();
+  }
+
   async function connectServer() {
     setStatus('Opening…');
+    let me;
+    try {
+      me = await api('GET', '/api/v1/auth/me');
+    } catch (err) {
+      if (err.status === 401) return; // showSignIn has already run
+      useLocal();
+      setStatus('Server unreachable · saved in this browser');
+      return;
+    }
     try {
       const rows = await api('GET', API);
       store.mode = 'server';
       contacts = rows.map(fromServer).filter(Boolean);
       loading = false;
-      setStatus('Saved to the rolodex server');
+      setStatus('Saved to your account · ' + me.email);
+      $('#btn-signout').hidden = false;
       rebuild();
-    } catch {
+    } catch (err) {
+      if (err.status === 401) return;
       useLocal();
       setStatus('Server unreachable · saved in this browser');
     }
   }
+
+  let authMode = 'signin';
+  function setAuthMode(mode) {
+    authMode = mode;
+    const signup = mode === 'signup';
+    $('#auth-title').textContent = signup ? 'Create account' : 'Sign in';
+    $('#auth-submit').textContent = signup ? 'Create account' : 'Sign in';
+    $('#auth-switch').textContent = signup ? 'I have an account' : 'Create an account';
+    $('#auth-error').textContent = '';
+  }
+  $('#auth-switch').addEventListener('click', () => setAuthMode(authMode === 'signin' ? 'signup' : 'signin'));
+  // Escape must not dismiss the dialog: without signing in there is nothing to show
+  $('#auth').addEventListener('cancel', (e) => e.preventDefault());
+  $('#auth-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const path = authMode === 'signup' ? '/api/v1/auth/signup' : '/api/v1/auth/login';
+    const res = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: form.email.value.trim(), password: form.password.value }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      $('#auth-error').textContent = data.error || 'Could not sign in.';
+      return;
+    }
+    form.password.value = '';
+    $('#auth').close();
+    await connectServer();
+  });
+  $('#btn-signout').addEventListener('click', async () => {
+    await fetch('/api/v1/auth/logout', { method: 'POST' });
+    showSignIn('');
+  });
 
   async function connect() {
     if (onServer) return connectServer();

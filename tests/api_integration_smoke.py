@@ -32,24 +32,78 @@ def test(name, fn):
         print(f'  ✗ {name}: {type(e).__name__}: {e}')
 
 
-def request(method, path, body=None, expect=200):
+import http.cookiejar
+import time
+
+def new_opener():
+    return urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+
+OPENER = new_opener()
+
+
+def request(method, path, body=None, expect=200, opener=None):
     url = BASE + path
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data,
                                  headers={'Content-Type': 'application/json'} if body is not None else {},
                                  method=method)
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        assert resp.status == expect, f'expected {expect}, got {resp.status}'
-        ct = resp.headers.get('content-type', '')
-        if 'json' in ct:
-            return json.loads(resp.read().decode())
-        return resp.read().decode()
+    try:
+        resp = (opener or OPENER).open(req, timeout=10)
+    except urllib.error.HTTPError as e:
+        resp = e
+    status = resp.code if isinstance(resp, urllib.error.HTTPError) else resp.status
+    assert status == expect, f'expected {expect}, got {status}'
+    ct = resp.headers.get('content-type', '')
+    text = resp.read().decode()
+    if 'json' in ct:
+        return json.loads(text)
+    return text
+
+
+def sign_up(email, password='correct-horse-battery'):
+    """Create an account and return an opener that holds its session cookie."""
+    opener = new_opener()
+    request('POST', '/api/v1/auth/signup', {'email': email, 'password': password}, expect=201, opener=opener)
+    return opener
 
 
 def main():
     print(f'Rolodex API Integration Smoke Tests')
     print(f'Target: {BASE}')
     print()
+
+    # Each run uses a fresh account, so test data never mixes with real accounts
+    global OPENER
+    run_id = str(int(time.time() * 1000))
+    OPENER = sign_up(f'smoke-{run_id}@example.test')
+    other = sign_up(f'smoke-other-{run_id}@example.test')
+    anon = new_opener()
+
+    print('[Accounts]')
+    test('signed-out contact list returns 401', lambda: request('GET', '/api/v1/contacts', expect=401, opener=anon))
+    test('signed-out /get_contacts returns 401', lambda: request('GET', '/get_contacts', expect=401, opener=anon))
+    test('wrong password returns 401', lambda: request('POST', '/api/v1/auth/login', {'email': f'smoke-{run_id}@example.test', 'password': 'wrong-password-here'}, expect=401, opener=anon))
+    test('duplicate signup returns 409', lambda: request('POST', '/api/v1/auth/signup', {'email': f'smoke-{run_id}@example.test', 'password': 'correct-horse-battery'}, expect=409, opener=anon))
+    test('GET /api/v1/auth/me returns the signed-in email', lambda: assert_equal(request('GET', '/api/v1/auth/me', opener=OPENER)['email'], f'smoke-{run_id}@example.test'))
+
+    isolation = {}
+
+    def create_isolation_contact():
+        isolation['id'] = request('POST', '/api/v1/contacts', {'name': 'Isolation Check'}, expect=201)['contact']['id']
+
+    test('create contact as first account', create_isolation_contact)
+    test('other account cannot see the contact', lambda: assert_equal(
+        [c for c in request('GET', '/api/v1/contacts', opener=other) if c['id'] == isolation['id']], []))
+    test('other account cannot edit the contact', lambda: request(
+        'PUT', f"/api/v1/contacts/{isolation['id']}", {'name': 'Hijacked'}, expect=404, opener=other))
+    test('other account cannot add a reminder to the contact', lambda: request(
+        'POST', f"/api/v1/contacts/{isolation['id']}/reminders", {'title': 'x', 'due_date': '2026-12-01'}, expect=404, opener=other))
+    test('other account cannot read the contact reminders', lambda: assert_equal(
+        request('GET', f"/api/v1/contacts/{isolation['id']}/reminders", opener=other)['reminders'], []))
+    test('other account delete does not remove the contact', lambda: (
+        request('DELETE', f"/api/v1/contacts/{isolation['id']}", expect=200, opener=other),
+        assert_equal(any(c['id'] == isolation['id'] for c in request('GET', '/api/v1/contacts', opener=OPENER)), True)))
+    test('owner can delete the contact', lambda: request('DELETE', f"/api/v1/contacts/{isolation['id']}", expect=200, opener=OPENER))
 
     # ── 1. Health & Readiness ──────────────────────────────────────────
     print('[Health]')
@@ -82,12 +136,7 @@ def main():
     ))
     # Never post a real list here: /save_contacts replaces the whole contacts table
     def save_contacts_rejects_non_list():
-        try:
-            request('POST', '/save_contacts', {'not': 'a list'})
-        except urllib.error.HTTPError as e:
-            assert_equal(e.code, 400)
-            return
-        raise AssertionError('expected HTTP 400')
+        request('POST', '/save_contacts', {'not': 'a list'}, expect=400)
     test('POST /save_contacts rejects non-list', save_contacts_rejects_non_list)
 
     # ── 4. v1 API — CRUD ──────────────────────────────────────────────
