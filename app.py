@@ -70,7 +70,8 @@ def handle_options():
 
 # ── Database helpers ───────────────────────────────────────────────────
 
-DATABASE_URL = os.environ.get('DATABASE_URL', '')  # set by hosted Postgres integrations such as Neon on Vercel
+# Hosted Postgres integrations on Vercel set POSTGRES_URL (Supabase) or DATABASE_URL (Neon)
+DATABASE_URL = os.environ.get('DATABASE_URL') or os.environ.get('POSTGRES_URL', '')
 
 def get_db_conn():
     if DATABASE_URL:
