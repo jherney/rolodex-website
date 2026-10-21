@@ -83,7 +83,7 @@ def main():
     test('signed-out contact list returns 401', lambda: request('GET', '/api/v1/contacts', expect=401, opener=anon))
     test('signed-out /get_contacts returns 401', lambda: request('GET', '/get_contacts', expect=401, opener=anon))
     test('wrong password returns 401', lambda: request('POST', '/api/v1/auth/login', {'email': f'smoke-{run_id}@example.test', 'password': 'wrong-password-here'}, expect=401, opener=anon))
-    test('duplicate signup returns 409', lambda: request('POST', '/api/v1/auth/signup', {'email': f'smoke-{run_id}@example.test', 'password': 'correct-horse-battery'}, expect=409, opener=anon))
+    test('duplicate signup returns 409 without revealing the account', lambda: assert_equal(request('POST', '/api/v1/auth/signup', {'email': f'smoke-{run_id}@example.test', 'password': 'correct-horse-battery'}, expect=409, opener=anon)['error'], "Couldn't create an account with that email. If you already have one, sign in instead."))
     test('GET /api/v1/auth/me is empty when signed out', lambda: assert_equal(request('GET', '/api/v1/auth/me', opener=anon)['email'], None))
     test('GET /api/v1/auth/me returns the signed-in email', lambda: assert_equal(request('GET', '/api/v1/auth/me', opener=OPENER)['email'], f'smoke-{run_id}@example.test'))
 

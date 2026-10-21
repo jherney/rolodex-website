@@ -361,7 +361,7 @@ def api_signup():
         conn.commit()
     except psycopg2.IntegrityError:
         conn.rollback()
-        return jsonify({'error': 'an account with this email already exists'}), 409
+        return jsonify({'error': "Couldn't create an account with that email. If you already have one, sign in instead."}), 409
     finally:
         conn.close()
 
