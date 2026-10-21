@@ -1,0 +1,27 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+MOK.priv
+
+# Secrets placeholders
+secrets.json
+.env
+.env.*
+
+# TLS material — never commit private keys
+key.pem
+cert.pem
+*.key
+
+# Local data and backups
+contacts.json
+*.log
+*.backup
+rolodex-cache/

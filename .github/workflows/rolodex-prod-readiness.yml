@@ -1,0 +1,30 @@
+# File: /home/jherney/rolodex-website/.github/workflows/rolodex-prod-readiness.yml
+name: Rolodex Prod Readiness
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  prod-readiness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      - name: Build and start stack
+        run: |
+          docker-compose up -d --build
+      - name: Seed Vault (test secret)
+        run: |
+          docker-compose exec vault vault kv put secret/rolodex/config app_config='{"EXAMPLE_SETTING":"VALUE"}'
+      - name: Health check
+        run: |
+          sleep 2
+          curl -sSf http://127.0.0.1:5000/get_contacts || true
+      - name: Teardown
+        if: always()
+        run: |
+          docker-compose down -v

@@ -1,0 +1,96 @@
+version: "3.9"
+
+services:
+  # ── HashiCorp Vault (optional secrets management) ──────────────────────
+  vault:
+    image: hashicorp/vault:1.14
+    container_name: rolodex-vault
+    profiles:
+      - with-vault
+    ports:
+      - "8200:8200"
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: root
+      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+    command: server -dev -dev-root-token-id=root -dev-listen-address=0.0.0.0:8200
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ── PostgreSQL (contacts store) ───────────────────────────────────────
+  db:
+    image: docker.io/library/postgres:16-alpine
+    container_name: rolodex-db
+    environment:
+      POSTGRES_DB: "${ROLODEX_DB_NAME:-rolodex}"
+      POSTGRES_USER: "${ROLODEX_DB_USER:-rolodex}"
+      POSTGRES_PASSWORD: "${ROLODEX_DB_PASSWORD:-rolodex123}"
+    volumes:
+      - rolodex-pgdata:/var/lib/postgresql/data:z
+    # Not published to the host by default (a host Postgres may already own 5432).
+    # Uncomment to reach it with psql from the host:
+    # ports:
+    #   - "127.0.0.1:${ROLODEX_DB_HOST_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # ── Rolodex application ───────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      additional_contexts:
+        vintage: ../vintage-rolodex
+    container_name: rolodex-app
+    ports:
+      # Host loopback only: the API has no authentication
+      - "127.0.0.1:${ROLODEX_PORT:-5000}:5000"
+    environment:
+      ROLODEX_PORT: "5000"
+      ROLODEX_HOST: "0.0.0.0"
+      ROLODEX_DEBUG: "0"
+      ROLODEX_LOG_LEVEL: "info"
+      ROLODEX_WORKERS: "4"
+      ROLODEX_CORS_ORIGIN: "${ROLODEX_CORS_ORIGIN:-}"
+      # Database: the db service above
+      ROLODEX_DB_HOST: db
+      ROLODEX_DB_PORT: "5432"
+      ROLODEX_DB_NAME: "${ROLODEX_DB_NAME:-rolodex}"
+      ROLODEX_DB_USER: "${ROLODEX_DB_USER:-rolodex}"
+      ROLODEX_DB_PASSWORD: "${ROLODEX_DB_PASSWORD:-rolodex123}"
+      # Fireworks AI (optional — set via .env or env file)
+      FIREWORKS_API_KEY: "${FIREWORKS_API_KEY:-}"
+      FIREWORKS_API_URL: "${FIREWORKS_API_URL:-https://api.fireworks.ai/inference/v1}"
+      # Vault secrets (optional)
+      VAULT_ADDR: "${VAULT_ADDR:-}"
+      VAULT_TOKEN: "${VAULT_TOKEN:-}"
+      ROLODEX_VAULT_PATH: "${ROLODEX_VAULT_PATH:-secret/rolodex/config}"
+    volumes:
+      # Persist contacts data outside the container
+      - rolodex-data:/data:z
+    working_dir: /app
+    command: ["gunicorn", "-c", "gunicorn_config.py", "wsgi_entry:app"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    depends_on:
+      db:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+        required: false
+    restart: unless-stopped
+
+volumes:
+  rolodex-data:
+  rolodex-pgdata:

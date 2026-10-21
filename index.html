@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <meta
+      name="theme-color"
+      content="#2E4636"
+      media="(prefers-color-scheme: light)"
+    />
+    <meta
+      name="theme-color"
+      content="#1C2B22"
+      media="(prefers-color-scheme: dark)"
+    />
+    <title>Rolodex - Contacts</title>
+    <link rel="manifest" href="manifest.json" />
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@100..125,400..800&family=Courier+Prime:wght@400;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div class="container">
+      <header class="topbar">
+        <h1 class="wordmark">Rolodex</h1>
+        <div class="search-box">
+          <input
+            type="search"
+            id="searchInput"
+            placeholder="Find a contact"
+            aria-label="Find a contact"
+          />
+          <button id="searchBtn" class="action-btn">Search</button>
+          <button id="clearBtn" class="action-btn">Clear search</button>
+        </div>
+        <div class="filter-group">
+          <label for="filterBy">Tag</label>
+          <select id="filterBy">
+            <option value="all">All tags</option>
+          </select>
+        </div>
+        <p class="card-counter" aria-live="polite">
+          <span id="cardCount">0</span> of <span id="totalCount">0</span> contacts
+        </p>
+        <div class="header-actions">
+          <button
+            id="themeToggle"
+            class="icon-btn"
+            aria-label="Switch between light and dark"
+            title="Switch between light and dark"
+          >
+            🌓
+          </button>
+          <button
+            id="shortcutsBtn"
+            class="icon-btn"
+            aria-label="Keyboard shortcuts"
+            title="Keyboard shortcuts"
+          >
+            ⌨️
+          </button>
+        </div>
+      </header>
+
+      <nav class="controls" aria-label="Contact actions">
+        <button id="addContactBtn" class="action-btn primary">Add contact</button>
+        <button id="importBtn" class="action-btn">Import</button>
+        <button id="exportBtn" class="action-btn">Export</button>
+        <button id="duplicatesBtn" class="action-btn">Find duplicates</button>
+        <input
+          type="file"
+          id="fileInput"
+          accept=".json,.csv,.vcf"
+          style="display: none"
+          aria-label="Choose a file to import"
+        />
+      </nav>
+
+      <!-- Bulk action bar -->
+      <div class="bulk-bar" id="bulkBar" style="display: none">
+        <span id="bulkCount">0 selected</span>
+        <button id="bulkDeleteBtn" class="danger-btn">Delete</button>
+        <button id="bulkTagBtn">Tag</button>
+        <button id="bulkExportBtn">Export</button>
+        <button id="bulkClearBtn">Clear selection</button>
+      </div>
+
+      <main class="rolodex-container">
+        <div class="rolodex-stage">
+          <div
+            class="rolodex-wheel"
+            id="rolodexWheel"
+            aria-label="Contact cards"
+            role="region"
+            aria-live="polite"
+          >
+            <!-- Cards inserted here -->
+          </div>
+          <div class="rolodex-rod" aria-hidden="true"></div>
+          <div class="rolodex-knob left" aria-hidden="true"></div>
+          <div class="rolodex-knob right" aria-hidden="true"></div>
+          <div class="rolodex-base" aria-hidden="true"></div>
+          <button id="rotateLeftBtn" class="turn-btn prev" aria-label="Previous card" title="Previous card">←</button>
+          <button id="rotateRightBtn" class="turn-btn next" aria-label="Next card" title="Next card">→</button>
+        </div>
+      </main>
+    </div>
+
+    <!-- Contact Modal -->
+    <dialog class="modal" id="contactModal">
+      <div class="modal-content">
+        <span class="close" aria-label="Close modal">&times;</span>
+        <h2 id="modalTitle">Add contact</h2>
+        <form id="contactForm">
+          <input type="hidden" id="contactId" />
+          <div class="form-row">
+            <div class="form-group flex-2">
+              <label for="name">Name</label>
+              <input
+                type="text"
+                id="name"
+                required
+                placeholder="Enter name"
+                aria-required="true"
+              />
+            </div>
+            <div class="form-group flex-1">
+              <label for="birthday">Birthday</label>
+              <input
+                type="date"
+                id="birthday"
+                placeholder="YYYY-MM-DD"
+                aria-label="Birthday"
+              />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="phone">Phone</label>
+              <input
+                type="tel"
+                id="phone"
+                placeholder="(555) 123-4567"
+                aria-label="Phone number"
+              />
+            </div>
+            <div class="form-group">
+              <label for="email">Email</label>
+              <input
+                type="email"
+                id="email"
+                placeholder="name@email.com"
+                aria-label="Email address"
+              />
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="address">Address</label>
+            <input
+              type="text"
+              id="address"
+              placeholder="123 Main St"
+              aria-label="Address"
+            />
+          </div>
+          <div class="form-group">
+            <label for="social">Social profiles</label>
+            <input
+              type="text"
+              id="social"
+              placeholder="GitHub: @user, Mastodon: @handle"
+              aria-label="Social media handles"
+            />
+          </div>
+          <div class="form-group">
+            <label for="avatar">Photo</label>
+            <div class="avatar-upload">
+              <div class="avatar-preview" id="avatarPreview">
+                <span class="avatar-initials" id="avatarInitials">?</span>
+              </div>
+              <div class="avatar-inputs">
+                <input
+                  type="url"
+                  id="avatarUrl"
+                  placeholder="Image URL (optional)"
+                  aria-label="Avatar image URL"
+                />
+                <input
+                  type="file"
+                  id="avatarFile"
+                  accept="image/*"
+                  aria-label="Upload avatar image"
+                />
+              </div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="tagsInput">Tags</label>
+            <div class="tags-editor" id="tagsEditor">
+              <div class="tags-list" id="tagsList"></div>
+              <div class="tag-input-row">
+                <input
+                  type="text"
+                  id="tagsInput"
+                  placeholder="Type a tag and press Enter"
+                  aria-label="Add tag"
+                />
+                <button type="button" id="addTagBtn" class="small-btn">
+                  +
+                </button>
+              </div>
+              <div class="suggested-tags" id="suggestedTags"></div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="notes">Notes</label>
+            <textarea
+              id="notes"
+              placeholder="Anything worth remembering"
+              rows="3"
+              aria-label="Additional notes"
+            ></textarea>
+            <div class="notes-preview" id="notesPreview"></div>
+          </div>
+          <div class="form-group">
+            <label>Linked contacts</label>
+            <div id="linkedContacts" class="linked-contacts"></div>
+          </div>
+          <div class="form-actions">
+            <button
+              type="button"
+              id="deleteContactBtn"
+              class="delete-btn"
+              aria-label="Delete contact"
+            >
+              Delete contact
+            </button>
+            <button type="submit" class="save-btn">Save contact</button>
+          </div>
+        </form>
+
+        <!-- Reminders and activity log: shown only for saved contacts -->
+        <section class="contact-extras" id="contactExtras" hidden>
+          <h3>Reminders</h3>
+          <ul class="extras-list" id="reminderList"></ul>
+          <form class="extras-form" id="reminderForm">
+            <input type="text" id="reminderTitle" placeholder="Reminder" aria-label="Reminder title" required />
+            <input type="date" id="reminderDue" aria-label="Due date" required />
+            <button type="submit" class="secondary-button">Add reminder</button>
+          </form>
+
+          <h3>Activity</h3>
+          <ul class="extras-list" id="activityList"></ul>
+          <form class="extras-form" id="activityForm">
+            <select id="activityType" aria-label="Activity type">
+              <option>Call</option>
+              <option>Email</option>
+              <option>Meeting</option>
+              <option>Note</option>
+            </select>
+            <input type="text" id="activitySubject" placeholder="Subject" aria-label="Activity subject" required />
+            <button type="submit" class="secondary-button">Log activity</button>
+          </form>
+        </section>
+      </div>
+    </dialog>
+
+    <!-- Contact detail panel -->
+    <div class="selected-card-panel" id="selectedCardPanel">
+      <div class="panel-content">
+        <button class="close-panel">&times;</button>
+        <div class="panel-header">
+          <div class="panel-avatar" id="panelAvatar">
+            <span class="panel-avatar-initials" id="panelAvatarInitials"
+              >?</span
+            >
+          </div>
+          <div class="panel-title-group">
+            <h3 id="panelName">Contact Details</h3>
+            <div class="panel-tags" id="panelTags"></div>
+          </div>
+        </div>
+        <div class="panel-body" id="panelBody">
+          <!-- Details populated here -->
+        </div>
+        <div class="panel-timeline" id="panelTimeline"></div>
+        <div class="panel-actions">
+          <div class="panel-left-actions">
+            <button
+              class="edit-btn"
+              aria-label="Edit this contact"
+            >
+              Edit
+            </button>
+            <button
+              id="shareContactBtn"
+              class="tool-btn"
+              aria-label="Share contact as vCard"
+              title="Share vCard"
+            >
+              Download vCard
+            </button>
+          </div>
+          <div class="panel-nav-actions">
+            <button
+              class="prev-btn"
+              aria-label="Previous contact"
+            >
+              Previous
+            </button>
+            <button
+              class="next-btn"
+              aria-label="Next contact"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Shortcuts modal -->
+    <dialog class="modal" id="shortcutsModal">
+      <div class="modal-content">
+        <span class="close" id="closeShortcuts">&times;</span>
+        <h2>Keyboard shortcuts</h2>
+        <div class="shortcuts-grid">
+          <div class="shortcut-row">
+            <kbd>←</kbd><kbd>→</kbd><span>Rotate wheel</span>
+          </div>
+          <div class="shortcut-row">
+            <kbd>Space</kbd><span>Select center card</span>
+          </div>
+          <div class="shortcut-row">
+            <kbd>↑</kbd><kbd>↓</kbd><span>Previous or next contact in the panel</span>
+          </div>
+          <div class="shortcut-row">
+            <kbd>Tab</kbd><span>Focus next panel button</span>
+          </div>
+          <div class="shortcut-row">
+            <kbd>Enter</kbd><span>Edit selected contact (panel)</span>
+          </div>
+          <div class="shortcut-row">
+            <kbd>Esc</kbd><span>Close modal / panel</span>
+          </div>
+          <div class="shortcut-row">
+            <kbd>Ctrl+F</kbd><span>Focus search</span>
+          </div>
+          <div class="shortcut-row">
+            <kbd>Ctrl+N</kbd><span>New contact</span>
+          </div>
+        </div>
+      </div>
+    </dialog>
+
+    <!-- Bulk tag dialog -->
+    <dialog class="modal" id="bulkTagModal">
+      <div class="modal-content">
+        <span class="close" id="closeBulkTag">&times;</span>
+        <h2>Tag selected contacts</h2>
+        <p
+          style="margin-bottom: 16px; color: var(--text-secondary)"
+          id="bulkTagInfo"
+        >
+          Tag 0 contacts
+        </p>
+        <div class="form-group">
+          <label for="bulkTagInput">Tag name</label>
+          <input
+            type="text"
+            id="bulkTagInput"
+            placeholder="Enter tag name"
+            aria-label="Tag name"
+          />
+        </div>
+        <div class="form-actions">
+          <button
+            type="button"
+            id="bulkTagApplyBtn"
+            class="save-btn"
+            style="flex: 1"
+          >
+            Apply tag
+          </button>
+        </div>
+      </div>
+    </dialog>
+
+    <!-- Merge dialog -->
+    <dialog class="modal" id="mergeModal">
+      <div class="modal-content merge-modal-content">
+        <span class="close" id="closeMerge">&times;</span>
+        <h2>Merge contacts</h2>
+        <p
+          style="margin-bottom: 16px; color: var(--text-secondary)"
+          id="mergeInfo"
+        >
+          Select which fields to keep from each contact.
+        </p>
+        <div id="mergeBody" class="merge-body"></div>
+        <div class="form-actions" style="margin-top: 20px">
+          <button type="button" id="mergeCancelBtn" class="delete-btn">
+            Cancel
+          </button>
+          <button type="button" id="mergeApplyBtn" class="save-btn">
+            Merge contacts
+          </button>
+        </div>
+      </div>
+    </dialog>
+
+    <!-- Upcoming birthdays panel -->
+    <div class="birthday-bar" id="birthdayBar" style="display: none">
+      <span id="birthdayBarContent"></span>
+      <button
+        id="birthdayCloseBtn"
+        class="icon-btn"
+        style="width: 28px; height: 28px; font-size: 1rem"
+      >
+        &times;
+      </button>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/marked@18.0.14/lib/marked.umd.js" integrity="sha384-2vpGtuKqJvFlwJqYnf/wUMuzUfhUnYBt9oay0e2yaFcq0Dh6/aEbQ8YAOeKGzlYo" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.16/dist/purify.js" integrity="sha384-5ljoOT1W/4gxqpYTLxnNi16VfKAgIDUQeOR8s/vRrSDtBVQmySEejDXexFM6L2+R" crossorigin="anonymous"></script>
+    <script src="app.js"></script>
+    <script>
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker
+          .register("/sw.js")
+          .then(() => {
+            console.log("SW registered");
+          })
+          .catch(() => {
+            console.log("SW registration skipped (offline or no HTTPS)");
+          });
+      }
+    </script>
+  </body>
+</html>
