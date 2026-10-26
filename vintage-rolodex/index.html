@@ -19,7 +19,8 @@
       <button id="btn-new" class="btn primary" title="New card (N)">+ New Card</button>
       <button id="btn-sound" class="btn" title="Toggle click sound" aria-pressed="true">🔊</button>
       <button id="btn-export" class="btn" title="Export contacts as JSON">Export</button>
-      <label class="btn" title="Import contacts from JSON">Import<input id="file-import" type="file" accept=".json,application/json" hidden></label>
+      <label class="btn" title="Import contacts from a JSON, CSV or vCard file">Import<input id="file-import" type="file" accept=".json,.csv,.vcf,application/json,text/csv,text/vcard" hidden></label>
+      <button id="btn-duplicates" class="btn" title="Find possible duplicate cards" hidden>Duplicates</button>
       <button id="btn-signout" class="btn" hidden>Sign out</button>
       <span class="status" id="status"></span>
     </div>
@@ -73,6 +74,46 @@
         <button type="submit" id="btn-save" class="btn primary">File It</button>
       </div>
     </form>
+  </dialog>
+
+  <!-- Import preview: nothing is filed until the confirm button is pressed -->
+  <dialog id="import-review" class="editor">
+    <div class="index-card form-card">
+      <div class="card-head"><h2>Review import</h2></div>
+      <p class="review-summary" id="import-summary"></p>
+      <ul class="review-list" id="import-rows"></ul>
+      <div class="actions">
+        <button type="button" id="btn-import-cancel" class="btn">Cancel</button>
+        <span class="spacer"></span>
+        <button type="button" id="btn-import-confirm" class="btn primary">File</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Possible duplicates: review pairs and merge them -->
+  <dialog id="duplicates-review" class="editor">
+    <div class="index-card form-card">
+      <div class="card-head"><h2>Possible duplicates</h2></div>
+      <p class="review-summary" id="duplicates-summary"></p>
+      <ul class="review-list" id="duplicates-rows"></ul>
+      <div class="actions">
+        <span class="spacer"></span>
+        <button type="button" id="btn-duplicates-close" class="btn">Close</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="merge-review" class="editor">
+    <div class="index-card form-card">
+      <div class="card-head"><h2>Merge cards</h2></div>
+      <p class="review-summary" id="merge-info"></p>
+      <div class="merge-choices" id="merge-choices"></div>
+      <div class="actions">
+        <button type="button" id="btn-merge-cancel" class="btn">Cancel</button>
+        <span class="spacer"></span>
+        <button type="button" id="btn-merge-confirm" class="btn primary">Merge</button>
+      </div>
+    </div>
   </dialog>
 
   <dialog id="auth" class="editor">

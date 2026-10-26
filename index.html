@@ -413,6 +413,30 @@
       </div>
     </dialog>
 
+    <!-- Import preview: nothing is written until Import is pressed -->
+    <dialog class="modal" id="importModal">
+      <div class="modal-content review-modal-content">
+        <span class="close" id="closeImport">&times;</span>
+        <h2>Review import</h2>
+        <p class="review-summary" id="importSummary"></p>
+        <ul class="review-list" id="importRows"></ul>
+        <div class="form-actions">
+          <button type="button" id="importCancelBtn" class="delete-btn">Cancel</button>
+          <button type="button" id="importConfirmBtn" class="save-btn">Import</button>
+        </div>
+      </div>
+    </dialog>
+
+    <!-- Possible duplicates: review and merge pairs -->
+    <dialog class="modal" id="duplicatesModal">
+      <div class="modal-content review-modal-content">
+        <span class="close" id="closeDuplicates">&times;</span>
+        <h2>Possible duplicates</h2>
+        <p class="review-summary" id="duplicatesInfo"></p>
+        <ul class="review-list" id="duplicatesList"></ul>
+      </div>
+    </dialog>
+
     <!-- Upcoming birthdays panel -->
     <div class="birthday-bar" id="birthdayBar" style="display: none">
       <span id="birthdayBarContent"></span>

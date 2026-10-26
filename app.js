@@ -65,6 +65,17 @@ const mergeInfo = document.getElementById('mergeInfo');
 const mergeBody = document.getElementById('mergeBody');
 const mergeCancelBtn = document.getElementById('mergeCancelBtn');
 const mergeApplyBtn = document.getElementById('mergeApplyBtn');
+const importModal = document.getElementById('importModal');
+const closeImport = document.getElementById('closeImport');
+const importSummary = document.getElementById('importSummary');
+const importRows = document.getElementById('importRows');
+const importCancelBtn = document.getElementById('importCancelBtn');
+const importConfirmBtn = document.getElementById('importConfirmBtn');
+const duplicatesModal = document.getElementById('duplicatesModal');
+const closeDuplicates = document.getElementById('closeDuplicates');
+const duplicatesInfo = document.getElementById('duplicatesInfo');
+const duplicatesList = document.getElementById('duplicatesList');
+let pendingImportFile = null; // file previewed in the import dialog, written only on confirm
 const birthdayBar = document.getElementById('birthdayBar');
 const birthdayBarContent = document.getElementById('birthdayBarContent');
 const birthdayCloseBtn = document.getElementById('birthdayCloseBtn');
@@ -170,6 +181,14 @@ function setupEventListeners() {
   // Merge
   mergeCancelBtn.addEventListener('click', () => mergeModal.close());
   mergeApplyBtn.addEventListener('click', handleMergeApply);
+  mergeModal.addEventListener('close', resetMergeState);
+
+  // Import preview and duplicate review
+  importConfirmBtn.addEventListener('click', handleImportConfirm);
+  importCancelBtn.addEventListener('click', () => importModal.close());
+  closeImport.addEventListener('click', () => importModal.close());
+  importModal.addEventListener('close', resetImportState);
+  closeDuplicates.addEventListener('click', () => duplicatesModal.close());
 
   // Merge selection via shift-click on wheel cards
   let mergeSelectMode = false;
@@ -189,7 +208,7 @@ function setupEventListeners() {
         mergeContacts.push(contact);
         card.classList.add('selected-for-merge');
         if (mergeContacts.length === 2) {
-          showMergeDialog();
+          openMergeDialog(mergeContacts[0], mergeContacts[1]);
         }
       }
     }
@@ -731,32 +750,97 @@ function handleFilterChange() {
 // ----- Duplicates -----
 async function handleDuplicates() {
   try {
-    const response = await fetch('/api/v1/duplicates?threshold=0.7');
-    if (!response.ok) throw new Error('Duplicate check failed');
-    const duplicates = await response.json();
-    if (duplicates.length === 0) {
-      showToast('No duplicates found');
-      return;
-    }
-    // Show duplicates in a modal (we'll reuse a simple alert for now)
-    const msg = duplicates.map((dup, i) => {
-      return `Duplicate ${i+1} (score ${dup.score}):\n${dup.contacts.map(c => c.name).join(' vs ')}`;
-    }).join('\n\n');
-    alert(`Found ${duplicates.length} potential duplicate pairs:\n\n${msg}`);
+    await loadDuplicates();
+    duplicatesModal.showModal();
   } catch (err) {
     console.error(err);
     showToast('Duplicate check failed');
   }
 }
 
+async function loadDuplicates() {
+  const response = await fetch('/api/v1/duplicates?threshold=0.7');
+  if (!response.ok) throw new Error('Duplicate check failed');
+  renderDuplicates(await response.json());
+}
+
+function renderDuplicates(duplicates) {
+  duplicatesInfo.textContent = duplicates.length
+    ? `${duplicates.length} ${duplicates.length === 1 ? 'pair' : 'pairs'} may be the same person. Merging keeps the contact you choose and fills its blanks from the other.`
+    : 'No possible duplicates left.';
+  duplicatesList.innerHTML = '';
+  duplicates.forEach(dup => {
+    const [a, b] = dup.contacts;
+    const li = document.createElement('li');
+    li.className = 'review-item';
+    li.innerHTML = `
+      <div class="review-item-main">
+        <strong>${escapeHtml(a.name || 'Unnamed')}</strong> and <strong>${escapeHtml(b.name || 'Unnamed')}</strong>
+        <div class="review-reasons">${escapeHtml(dup.reasons.join(', ') || 'similar')} · ${Math.round(dup.score * 100)}%</div>
+      </div>
+      <button type="button" class="small-btn">Review merge</button>`;
+    li.querySelector('button').addEventListener('click', () => openMergeDialog(a, b));
+    duplicatesList.appendChild(li);
+  });
+}
+
 // ----- Import/Export -----
+// Choosing a file previews it; nothing is written until the user confirms in the preview.
 async function handleFileImport() {
   const file = fileInput.files[0];
   if (!file) return;
-  
+
   const formData = new FormData();
   formData.append('file', file);
-  
+
+  try {
+    const response = await fetch('/api/v1/import/preview', {
+      method: 'POST',
+      body: formData
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error || 'Import failed');
+    }
+    pendingImportFile = file;
+    renderImportPreview(await response.json());
+    importModal.showModal();
+  } catch (err) {
+    console.error(err);
+    showToast(err.message || 'Import failed');
+    fileInput.value = '';
+  }
+}
+
+function renderImportPreview({ rows, counts }) {
+  const willImport = counts.new + counts.possible;
+  importSummary.textContent = `${counts.total} in file: ${counts.new} new, ${counts.possible} sharing a name with an existing contact (imported), ${counts.skipped} skipped as already in your contacts.`;
+  importConfirmBtn.textContent = `Import ${willImport}`;
+  importConfirmBtn.disabled = willImport === 0;
+  const labels = { new: 'New', possible: 'Check', skipped: 'Skipped' };
+  importRows.innerHTML = '';
+  rows.forEach(row => {
+    const li = document.createElement('li');
+    li.className = `review-item review-${row.status}`;
+    const details = [row.phone, row.email].filter(Boolean).join(' · ');
+    const note = [details, row.reason].filter(Boolean).join(' · ');
+    li.innerHTML = `
+      <div class="review-item-main">
+        <strong>${escapeHtml(row.name || 'Unnamed')}</strong>
+        <div class="review-reasons">${escapeHtml(note)}</div>
+      </div>
+      <span class="review-badge">${labels[row.status]}</span>`;
+    importRows.appendChild(li);
+  });
+}
+
+async function handleImportConfirm() {
+  if (!pendingImportFile) return;
+
+  const formData = new FormData();
+  formData.append('file', pendingImportFile);
+  importConfirmBtn.disabled = true;
+
   try {
     const response = await fetch('/api/v1/import', {
       method: 'POST',
@@ -764,13 +848,22 @@ async function handleFileImport() {
     });
     if (!response.ok) throw new Error('Import failed');
     const result = await response.json();
-    showToast(`Imported: ${result.imported} total, ${result.new} new`);
-    fileInput.value = ''; // reset
+    const skipped = result.skipped_duplicates ? `, skipped ${result.skipped_duplicates} already in your contacts` : '';
+    showToast(`Imported ${result.new} new${skipped}`);
+    importModal.close();
     await loadContacts();
   } catch (err) {
     console.error(err);
     showToast('Import failed');
+  } finally {
+    importConfirmBtn.disabled = false;
   }
+}
+
+// Clears the pending import on every close path (cancel, X, Escape)
+function resetImportState() {
+  pendingImportFile = null;
+  fileInput.value = '';
 }
 
 async function handleExport() {
@@ -830,15 +923,40 @@ async function handleBulkTagApply() {
 }
 
 // ----- Merge -----
+// Opens the merge dialog for two contacts; the user picks which one survives.
+function openMergeDialog(a, b) {
+  mergeContacts = [a, b];
+  mergeInfo.textContent = 'Choose the contact to keep. Its details stay, blank fields are filled from the other, tags are combined and notes are appended.';
+  mergeBody.innerHTML = '';
+  [a, b].forEach((c, i) => {
+    const col = document.createElement('label');
+    col.className = 'merge-column';
+    col.innerHTML = `
+      <input type="radio" name="mergeKeep" value="${i}" ${i === 0 ? 'checked' : ''} />
+      <h4>${escapeHtml(c.name || 'Unnamed')}</h4>
+      <div>${escapeHtml(c.phone || '')}</div>
+      <div>${escapeHtml(c.email || '')}</div>
+      <div>${escapeHtml(c.address || '')}</div>
+      <div class="review-reasons">${escapeHtml((c.tags || []).join(', '))}</div>`;
+    mergeBody.appendChild(col);
+  });
+  mergeModal.showModal();
+}
+
+function resetMergeState() {
+  mergeContacts = [];
+  document.querySelectorAll('.selected-for-merge').forEach(el => el.classList.remove('selected-for-merge'));
+}
+
 async function handleMergeApply() {
   if (mergeContacts.length !== 2) {
     showToast('Please select two contacts to merge');
     return;
   }
-  
-  // Gather selected fields from UI (simplified: we'll merge all fields)
-  const [primary, secondary] = mergeContacts;
-  
+
+  const keepIndex = Number(mergeBody.querySelector('input[name="mergeKeep"]:checked')?.value ?? 0);
+  const [primary, secondary] = keepIndex === 0 ? mergeContacts : [mergeContacts[1], mergeContacts[0]];
+
   try {
     const response = await fetch('/api/v1/merge', {
       method: 'POST',
@@ -846,16 +964,15 @@ async function handleMergeApply() {
       body: JSON.stringify({
         primary_id: primary.id,
         secondary_id: secondary.id,
-        // For simplicity, we'll merge all fields (secondary non-empty overrides primary)
+        keep_existing: true,
         fields: ['name', 'phone', 'email', 'address', 'tags', 'notes', 'avatar', 'birthday', 'social', 'company', 'title']
       })
     });
     if (!response.ok) throw new Error('Merge failed');
-    const result = await response.json();
-    showToast('Contacts merged');
+    showToast(`Merged into ${primary.name || 'contact'}`);
     mergeModal.close();
-    mergeContacts = [];
     await loadContacts();
+    if (duplicatesModal.open) await loadDuplicates();
   } catch (err) {
     console.error(err);
     showToast('Merge failed');

@@ -138,6 +138,7 @@
     contacts = loadLocal();
     loading = false;
     setStatus('Saved in this browser');
+    $('#btn-duplicates').hidden = true;
     rebuild();
   }
 
@@ -149,6 +150,7 @@
     rebuild();
     setStatus('Sign in to see your cards');
     $('#btn-signout').hidden = true;
+    $('#btn-duplicates').hidden = true;
     $('#auth-error').textContent = message;
     if (!$('#auth').open) $('#auth').showModal();
   }
@@ -171,6 +173,7 @@
       loading = false;
       setStatus('Saved to your account · ' + me.email);
       $('#btn-signout').hidden = false;
+      $('#btn-duplicates').hidden = false;
       rebuild();
     } catch (err) {
       if (err.status === 401) return;
@@ -584,7 +587,7 @@
   });
 
   document.addEventListener('keydown', (e) => {
-    if (dialog.open) return;
+    if (document.querySelector('dialog[open]')) return;
     const typing = e.target.matches('input, textarea');
     if (e.key === 'Escape' && e.target === searchEl) { searchEl.value = ''; rebuild(currentId()); stage.focus(); return; }
     if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -714,6 +717,8 @@
     const file = e.target.files[0];
     e.target.value = '';
     if (!file) return;
+    if (store.mode === 'server') return previewImport(file);
+    if (!/\.json$/i.test(file.name)) return toast('CSV and vCard import needs the rolodex server.');
     try {
       const parsed = JSON.parse(await file.text());
       if (!Array.isArray(parsed)) throw new Error('Expected a list of contacts.');
@@ -738,6 +743,183 @@
     persist(store.put(examples));
   });
   $('#btn-first').addEventListener('click', () => openEditor(null));
+
+  // ---------- Review import, duplicates and merge (server only) ----------
+  // The server does the matching: preview, skip rules and merge rules live in app.py.
+  // These dialogs show what it reports and send the user's choice back.
+  const MERGE_FIELDS = ['name', 'phone', 'email', 'address', 'tags', 'notes', 'avatar', 'birthday', 'social', 'company', 'title'];
+  let pendingImport = null; // file previewed in the import dialog; written only on confirm
+  let mergePair = null;     // [a, b] server cards chosen for a merge
+
+  const uploadOf = (file) => {
+    const form = new FormData();
+    form.append('file', file);
+    return form;
+  };
+
+  // The JSON export uses the card shape (first/last), which the server reads as a name it doesn't have.
+  // Convert those cards to the server's shape so they dedupe like any other import.
+  async function shapeImportFile(file) {
+    if (!/\.json$/i.test(file.name)) return file;
+    const parsed = JSON.parse(await file.text());
+    if (!Array.isArray(parsed)) throw new Error('Expected a list of cards.');
+    const items = parsed.map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      if ('first' in item || 'last' in item) {
+        const c = normalize(item);
+        return c ? { id: c.id, ...toServer(c) } : null;
+      }
+      return item;
+    }).filter(Boolean);
+    return new File([JSON.stringify(items)], file.name, { type: 'application/json' });
+  }
+
+  async function previewImport(file) {
+    try {
+      pendingImport = await shapeImportFile(file);
+      const res = await fetch('/api/v1/import/preview', { method: 'POST', body: uploadOf(pendingImport) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Couldn’t read that file.');
+      renderImportReview(data);
+      $('#import-review').showModal();
+    } catch (err) {
+      pendingImport = null;
+      toast(err instanceof SyntaxError ? 'That file isn’t valid JSON.' : err.message);
+    }
+  }
+
+  function renderImportReview({ rows, counts }) {
+    const willFile = counts.new + counts.possible;
+    $('#import-summary').textContent = `${counts.total} in the file: ${counts.new} new, ${counts.possible} sharing a name with a card you have (filed), ${counts.skipped} already on your rolodex (skipped).`;
+    const confirmBtn = $('#btn-import-confirm');
+    confirmBtn.textContent = `File ${willFile}`;
+    confirmBtn.disabled = willFile === 0;
+    const labels = { new: 'New', possible: 'Check', skipped: 'Skipped' };
+    const list = $('#import-rows');
+    list.textContent = '';
+    for (const row of rows) {
+      const item = el('li', `review-item ${row.status}`);
+      const main = el('div', 'review-main');
+      main.append(el('strong', '', row.name || 'Unnamed'));
+      const note = [row.phone, row.email, row.reason].filter(Boolean).join(' · ');
+      if (note) main.append(el('div', 'review-note', note));
+      item.append(main, el('span', 'review-badge', labels[row.status]));
+      list.append(item);
+    }
+  }
+
+  async function confirmImport() {
+    if (!pendingImport) return;
+    const btn = $('#btn-import-confirm');
+    btn.disabled = true;
+    try {
+      const res = await fetch('/api/v1/import', { method: 'POST', body: uploadOf(pendingImport) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Import failed.');
+      $('#import-review').close();
+      await refreshServerCards();
+      const skipped = data.skipped_duplicates ? `, skipped ${data.skipped_duplicates} already on your rolodex` : '';
+      toast(`Filed ${data.new} new card(s)${skipped}.`);
+    } catch (err) {
+      toast(err.message);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function refreshServerCards() {
+    const rows = await api('GET', API);
+    contacts = rows.map(fromServer).filter(Boolean);
+    rebuild(currentId());
+  }
+
+  async function openDuplicates() {
+    try {
+      renderDuplicates(await api('GET', '/api/v1/duplicates?threshold=0.7'));
+      $('#duplicates-review').showModal();
+    } catch {
+      toast('Duplicate check failed.');
+    }
+  }
+
+  function renderDuplicates(pairs) {
+    $('#duplicates-summary').textContent = pairs.length
+      ? `${pairs.length} ${pairs.length === 1 ? 'pair' : 'pairs'} may be the same person. Merging keeps the card you choose and fills its blanks from the other.`
+      : 'No possible duplicates left.';
+    const list = $('#duplicates-rows');
+    list.textContent = '';
+    for (const pair of pairs) {
+      const [a, b] = pair.contacts;
+      const item = el('li', 'review-item');
+      const main = el('div', 'review-main');
+      main.append(el('strong', '', `${a.name || 'Unnamed'} and ${b.name || 'Unnamed'}`));
+      main.append(el('div', 'review-note', `${pair.reasons.join(', ') || 'similar'} · ${Math.round(pair.score * 100)}%`));
+      const review = el('button', 'btn', 'Review merge');
+      review.type = 'button';
+      review.addEventListener('click', () => openMerge(a, b));
+      item.append(main, review);
+      list.append(item);
+    }
+  }
+
+  function openMerge(a, b) {
+    mergePair = [a, b];
+    $('#merge-info').textContent = 'Choose the card to keep. Its details stay, blank fields are filled from the other, tags are combined and notes are appended.';
+    const choices = $('#merge-choices');
+    choices.textContent = '';
+    [a, b].forEach((c, i) => {
+      const option = el('label', 'merge-option');
+      const radio = el('input');
+      radio.type = 'radio';
+      radio.name = 'keep';
+      radio.value = String(i);
+      radio.checked = i === 0;
+      option.append(radio,
+        el('strong', '', c.name || 'Unnamed'),
+        el('div', 'review-note', [c.phone, c.email].filter(Boolean).join(' · ')),
+        el('div', 'review-note', (c.tags || []).join(', ')));
+      choices.append(option);
+    });
+    $('#merge-review').showModal();
+  }
+
+  async function confirmMerge() {
+    if (!mergePair) return;
+    const keep = Number($('#merge-choices input:checked')?.value ?? 0);
+    const [primary, secondary] = keep === 0 ? mergePair : [mergePair[1], mergePair[0]];
+    try {
+      await api('POST', '/api/v1/merge', {
+        primary_id: primary.id,
+        secondary_id: secondary.id,
+        keep_existing: true,
+        fields: MERGE_FIELDS,
+      });
+      $('#merge-review').close();
+      await refreshServerCards();
+      if ($('#duplicates-review').open) renderDuplicates(await api('GET', '/api/v1/duplicates?threshold=0.7'));
+      toast(`Merged into ${primary.name || 'a card'}.`);
+    } catch {
+      toast('Merge failed.');
+    }
+  }
+
+  $('#btn-duplicates').addEventListener('click', openDuplicates);
+  $('#btn-duplicates-close').addEventListener('click', () => $('#duplicates-review').close());
+  $('#btn-import-confirm').addEventListener('click', confirmImport);
+  $('#btn-import-cancel').addEventListener('click', () => $('#import-review').close());
+  $('#btn-merge-confirm').addEventListener('click', confirmMerge);
+  $('#btn-merge-cancel').addEventListener('click', () => $('#merge-review').close());
+  // Every close path (buttons, X, Escape) clears the pending state and returns focus to the desk
+  $('#import-review').addEventListener('close', () => {
+    pendingImport = null;
+    $('#file-import').value = '';
+    stage.focus();
+  });
+  $('#duplicates-review').addEventListener('close', () => stage.focus());
+  $('#merge-review').addEventListener('close', () => {
+    mergePair = null;
+    stage.focus();
+  });
 
   // ---------- Toast ----------
   let toastTimer;

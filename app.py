@@ -760,12 +760,52 @@ def _first_names_compatible(a_name, b_name):
     a_first, b_first = a_words[0], b_words[0]
     return a_first.startswith(b_first) or b_first.startswith(a_first)
 
+DUPLICATE_THRESHOLD = 0.7
+
+def _field(contact, key):
+    """A contact field as a stripped string; null or non-string values (e.g. from a JSON import) become ''."""
+    value = contact.get(key)
+    return str(value).strip() if value is not None else ''
+
+def _shared_email(a, b):
+    a_email = _field(a, 'email').lower()
+    return bool(a_email) and a_email == _field(b, 'email').lower()
+
+def _shared_phone(a, b):
+    a_phone = re.sub(r'\D', '', _field(a, 'phone'))
+    return bool(a_phone) and a_phone == re.sub(r'\D', '', _field(b, 'phone'))
+
+def _match_contacts(a, b):
+    """How likely two contacts are the same person: (score, reasons)."""
+    score = 0.0
+    reasons = []
+
+    # Name similarity (simple Jaccard on words)
+    a_words = set(_field(a, 'name').lower().split())
+    b_words = set(_field(b, 'name').lower().split())
+    if a_words and b_words:
+        jaccard = len(a_words & b_words) / len(a_words | b_words)
+        if jaccard > 0.5:
+            score = max(score, jaccard)
+            reasons.append(f"name: {jaccard:.0%}")
+
+    # A shared email or phone only means a duplicate if the names could be the same person
+    if _first_names_compatible(a.get('name'), b.get('name')):
+        if _shared_email(a, b):
+            score = max(score, 1.0)
+            reasons.append("email match")
+        if _shared_phone(a, b):
+            score = max(score, 0.95)
+            reasons.append("phone match")
+
+    return score, reasons
+
 @app.route('/api/v1/duplicates', methods=['GET'])
 @login_required
 def api_duplicates():
     """Detect potential duplicate contacts using fuzzy name/email/phone matching."""
     try:
-        threshold = float(request.args.get('threshold', '0.7'))
+        threshold = float(request.args.get('threshold', str(DUPLICATE_THRESHOLD)))
     except ValueError:
         return jsonify({'error': 'threshold must be a number'}), 400
     contacts = load_contacts(current_user_id())
@@ -773,35 +813,7 @@ def api_duplicates():
 
     for i, a in enumerate(contacts):
         for b in contacts[i+1:]:
-            score = 0.0
-            reasons = []
-
-            # Name similarity (simple Jaccard on words)
-            a_words = set(a.get('name','').lower().split())
-            b_words = set(b.get('name','').lower().split())
-            if a_words and b_words:
-                jaccard = len(a_words & b_words) / len(a_words | b_words)
-                if jaccard > 0.5:
-                    score = max(score, jaccard)
-                    reasons.append(f"name: {jaccard:.0%}")
-
-            # A shared email or phone only means a duplicate if the names could be the same person
-            same_person_possible = _first_names_compatible(a.get('name'), b.get('name'))
-
-            # Email match
-            a_email = a.get('email','').strip().lower()
-            b_email = b.get('email','').strip().lower()
-            if same_person_possible and a_email and a_email == b_email:
-                score = max(score, 1.0)
-                reasons.append("email match")
-
-            # Phone match (digits only)
-            a_phone = re.sub(r'\D', '', a.get('phone',''))
-            b_phone = re.sub(r'\D', '', b.get('phone',''))
-            if same_person_possible and a_phone and a_phone == b_phone:
-                score = max(score, 0.95)
-                reasons.append("phone match")
-
+            score, reasons = _match_contacts(a, b)
             if score >= threshold:
                 duplicates.append({
                     'score': round(score, 2),
@@ -814,23 +826,26 @@ def api_duplicates():
 
 # ── Import/Export ──────────────────────────────────────────────────────
 
-@app.route('/api/v1/import', methods=['POST'])
-@login_required
-def api_import():
-    """Import contacts from JSON, CSV, or vCard format."""
-    file = request.files.get('file')
-    if not file:
-        return jsonify({'error': 'no file provided'}), 400
+def _csv_value(row, *names):
+    """First present CSV column among `names`, stripped. Short rows leave trailing columns as None."""
+    for name in names:
+        value = row.get(name)
+        if value is not None:
+            return value.strip()
+    return ''
 
+def _read_import_file(file):
+    """Parse an uploaded JSON, CSV or vCard file into contact dicts. Returns (contacts, error)."""
     filename = file.filename.lower()
-    content = file.read().decode('utf-8', errors='replace')
+    # utf-8-sig drops the BOM that Excel adds to CSV files, so the first header still reads "name"
+    content = file.read().decode('utf-8-sig', errors='replace')
     imported = []
 
     if filename.endswith('.json'):
         try:
             data = json.loads(content)
         except json.JSONDecodeError as e:
-            return jsonify({'error': f'invalid JSON: {e}'}), 400
+            return [], f'invalid JSON: {e}'
         if isinstance(data, dict):
             data = data.get('contacts')
         if isinstance(data, list):
@@ -843,14 +858,14 @@ def api_import():
         for row in reader:
             contact = {
                 'id': _new_id(),
-                'name': row.get('name', row.get('Name', row.get('NAME', ''))).strip(),
-                'phone': row.get('phone', row.get('Phone', row.get('PHONE', ''))).strip(),
-                'email': row.get('email', row.get('Email', row.get('EMAIL', ''))).strip(),
-                'address': row.get('address', row.get('Address', row.get('ADDRESS', ''))).strip(),
-                'tags': [t.strip() for t in row.get('tags', row.get('Tags', '')).split(',') if t.strip()],
-                'notes': row.get('notes', row.get('Notes', '')).strip(),
+                'name': _csv_value(row, 'name', 'Name', 'NAME'),
+                'phone': _csv_value(row, 'phone', 'Phone', 'PHONE'),
+                'email': _csv_value(row, 'email', 'Email', 'EMAIL'),
+                'address': _csv_value(row, 'address', 'Address', 'ADDRESS'),
+                'tags': [t.strip() for t in _csv_value(row, 'tags', 'Tags').split(',') if t.strip()],
+                'notes': _csv_value(row, 'notes', 'Notes'),
                 'avatar': '',
-                'birthday': row.get('birthday', row.get('Birthday', '')),
+                'birthday': _csv_value(row, 'birthday', 'Birthday'),
                 'social': {},
                 'linked_contacts': [],
                 'createdAt': datetime.now().isoformat(),
@@ -863,22 +878,81 @@ def api_import():
         imported = parse_vcard(content)
 
     if not imported:
-        return jsonify({'error': 'no valid contacts found in file'}), 400
+        return [], 'no valid contacts found in file'
+    return imported, None
 
-    # Merge with existing: skip contacts this user already has. An id held by another
-    # account is replaced with a fresh one so the import never touches their data.
+def _plan_import(known, imported):
+    """Classify each parsed contact against the user's existing contacts, without writing anything.
+
+    A contact is skipped when its id exists or its email or phone matches a known contact. Names alone
+    never skip (two people can share a name), so those are 'possible' and still imported. Each kept
+    contact joins the known set, so duplicates within the file are caught too.
+    Returns (rows, to_add): one row per parsed contact, and the contacts to insert."""
+    known = list(known)
+    known_ids = {k.get('id') for k in known}
+    rows = []
+    to_add = []
+    for c in imported:
+        row = {'name': _field(c, 'name'), 'email': _field(c, 'email'), 'phone': _field(c, 'phone'),
+               'status': 'new', 'reason': ''}
+        same = next((k for k in known if _shared_email(k, c) or _shared_phone(k, c)), None)
+        if c['id'] in known_ids:
+            row.update(status='skipped', reason='already in your contacts')
+        elif same:
+            why = 'same email' if _shared_email(same, c) else 'same phone'
+            row.update(status='skipped', reason=f"{why} as {_field(same, 'name') or 'an existing contact'}")
+        else:
+            similar = next((k for k in known if _match_contacts(k, c)[0] >= DUPLICATE_THRESHOLD), None)
+            if similar:
+                row.update(status='possible', reason=f"same name as {_field(similar, 'name') or 'an existing contact'}")
+            known.append(c)
+            known_ids.add(c['id'])
+            to_add.append(c)
+        rows.append(row)
+    return rows, to_add
+
+def _import_counts(rows):
+    counts = {'total': len(rows), 'new': 0, 'possible': 0, 'skipped': 0}
+    for row in rows:
+        counts[row['status']] += 1
+    return counts
+
+@app.route('/api/v1/import/preview', methods=['POST'])
+@login_required
+def api_import_preview():
+    """Show what an import would do, without writing anything."""
+    file = request.files.get('file')
+    if not file:
+        return jsonify({'error': 'no file provided'}), 400
+    imported, error = _read_import_file(file)
+    if error:
+        return jsonify({'error': error}), 400
+    rows, _ = _plan_import(load_contacts(current_user_id()), imported)
+    return jsonify({'rows': rows, 'counts': _import_counts(rows)})
+
+@app.route('/api/v1/import', methods=['POST'])
+@login_required
+def api_import():
+    """Import contacts from JSON, CSV, or vCard format."""
+    file = request.files.get('file')
+    if not file:
+        return jsonify({'error': 'no file provided'}), 400
+    imported, error = _read_import_file(file)
+    if error:
+        return jsonify({'error': error}), 400
+
     uid = current_user_id()
+    rows, to_add = _plan_import(load_contacts(uid), imported)
+    counts = _import_counts(rows)
+
+    # An id held by another account is replaced with a fresh one so the import never touches their data.
     conn = get_db_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT id FROM contacts WHERE user_id = %s", (uid,))
-            existing_ids = {r[0] for r in cur.fetchall()}
-            cur.execute("SELECT id FROM contacts WHERE id = ANY(%s)", ([c['id'] for c in imported],))
+            cur.execute("SELECT id FROM contacts WHERE id = ANY(%s)", ([c['id'] for c in to_add],))
             taken_ids = {r[0] for r in cur.fetchall()}
             new_count = 0
-            for c in imported:
-                if c['id'] in existing_ids:
-                    continue
+            for c in to_add:
                 if c['id'] in taken_ids:
                     c['id'] = _new_id()
                 cur.execute(
@@ -908,7 +982,6 @@ def api_import():
                         uid,
                     )
                 )
-                existing_ids.add(c['id'])
                 new_count += 1
         conn.commit()
     except Exception as e:
@@ -917,7 +990,13 @@ def api_import():
     finally:
         conn.close()
 
-    return jsonify({'status': 'ok', 'imported': len(imported), 'new': new_count})
+    return jsonify({
+        'status': 'ok',
+        'imported': len(imported),
+        'new': new_count,
+        'skipped_duplicates': counts['skipped'],
+        'possible_duplicates': counts['possible'],
+    })
 
 
 def parse_vcard(content):
@@ -1324,7 +1403,9 @@ def api_merge():
     if not primary or not secondary:
         return jsonify({'error': 'one or both contacts not found'}), 404
 
-    # Field-level merge: secondary's non-empty values win for specified fields
+    # Field-level merge. By default secondary's non-empty values win for specified fields.
+    # keep_existing: primary's values win and secondary only fills blanks (notes are appended).
+    keep_existing = bool(data.get('keep_existing'))
     merge_fields = data.get('fields', ['name', 'phone', 'email', 'address', 'tags', 'notes', 'avatar', 'birthday', 'social', 'company', 'title'])
     for field in merge_fields:
         if field == 'tags':
@@ -1334,15 +1415,19 @@ def api_merge():
         elif field == 'social':
             primary_social = primary.get('social', {}) or {}
             secondary_social = secondary.get('social', {}) or {}
-            primary_social.update(secondary_social)
-            primary['social'] = primary_social
+            primary['social'] = {**secondary_social, **primary_social} if keep_existing else {**primary_social, **secondary_social}
         elif field == 'linked_contacts':
             combined = list(dict.fromkeys(primary.get('linked_contacts', []) + secondary.get('linked_contacts', [])))
             # Remove references to the secondary contact itself
             primary['linked_contacts'] = [cid for cid in combined if cid != secondary['id']]
         else:
             val = secondary.get(field)
-            if val:
+            if keep_existing:
+                if field == 'notes' and primary.get('notes') and val and val != primary['notes']:
+                    primary['notes'] = f"{primary['notes']}\n\n{val}"
+                elif val and not primary.get(field):
+                    primary[field] = val
+            elif val:
                 primary[field] = val
 
     primary['updatedAt'] = datetime.now().isoformat()
