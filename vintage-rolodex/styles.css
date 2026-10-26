@@ -488,6 +488,57 @@ body {
   z-index: 50;
 }
 
+/* ---------- Review dialogs: import preview, duplicates, merge ---------- */
+.review-summary { margin: 6px 0 4px; font-size: 13px; color: var(--ink-soft); }
+.review-list {
+  list-style: none;
+  margin: 8px 0 12px;
+  padding: 0;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+.review-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 2px;
+  border-bottom: 1px dashed rgba(42, 38, 34, 0.25);
+  font-family: "Special Elite", "Courier New", monospace;
+  color: var(--ink);
+}
+.review-item:last-child { border-bottom: none; }
+.review-item.skipped { opacity: 0.55; }
+.review-main { min-width: 0; overflow-wrap: anywhere; }
+.review-note { font-size: 12px; color: var(--ink-soft); }
+.review-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 2px 7px;
+  border: 1px solid var(--ink-soft);
+  border-radius: 3px;
+  color: var(--ink-soft);
+}
+.review-item.new .review-badge { color: #2f6b3a; border-color: #2f6b3a; }
+.review-item.possible .review-badge { color: #8a5d12; border-color: #8a5d12; }
+.review-item .btn { flex-shrink: 0; }
+.merge-choices { display: flex; flex-wrap: wrap; gap: 12px; margin: 8px 0; }
+.merge-option {
+  flex: 1 1 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  border: 1px dashed rgba(42, 38, 34, 0.4);
+  border-radius: 4px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.merge-option:has(input:checked) { border-color: var(--red); background: rgba(255, 255, 255, 0.35); }
+.merge-option input { align-self: flex-start; }
+
 /* ---------- Small screens ---------- */
 @media (max-width: 560px) {
   :root { --card-w: 300px; --card-h: 196px; }

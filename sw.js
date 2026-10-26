@@ -1,5 +1,5 @@
 // Rolodex Service Worker — Offline-First PWA
-const CACHE_NAME = 'rolodex-v14';
+const CACHE_NAME = 'rolodex-v16';
 const ASSETS = [
   '/',
   '/vintage/styles.css',

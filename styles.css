@@ -948,6 +948,76 @@ body {
   justify-content: center;
   gap: 1rem;
 }
+#mergeModal .merge-body {
+  flex-wrap: wrap;
+}
+#mergeModal .merge-column {
+  min-width: 0;
+  flex-basis: 180px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+#mergeModal .merge-column input[type="radio"] {
+  display: block;
+  margin: 0 auto 0.5rem;
+}
+
+/* Review dialogs: import preview and possible duplicates */
+.review-modal-content {
+  width: min(520px, calc(100vw - 32px));
+}
+.review-summary {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  margin-bottom: 12px;
+}
+.review-list {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  max-height: 50vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.review-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--bg-muted);
+  border-radius: var(--border-radius);
+}
+.review-item-main {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.review-reasons {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+.review-badge {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-muted);
+  color: var(--text-secondary);
+}
+.review-new .review-badge {
+  background: var(--success);
+  color: var(--on-accent);
+}
+.review-possible .review-badge {
+  background: var(--warning);
+  color: var(--on-accent);
+}
+.review-skipped {
+  opacity: 0.6;
+}
 
 /* Birthday Bar */
 #birthdayBar {

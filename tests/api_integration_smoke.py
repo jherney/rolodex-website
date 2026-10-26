@@ -204,6 +204,68 @@ def main():
         assert_isinstance(result, list)
     test('GET /api/v1/duplicates returns list', find_dupes)
 
+    # ── 5b. Import ─────────────────────────────────────────────────────
+    print('[Import]')
+    import_opener = sign_up(f'smoke-import-{run_id}@example.test')
+
+    def upload_import(filename, data):
+        boundary = f'----rolodex-smoke-{time.time_ns()}'
+        body = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+                'Content-Type: application/octet-stream\r\n\r\n').encode() + data + f'\r\n--{boundary}--\r\n'.encode()
+        req = urllib.request.Request(BASE + '/api/v1/import', data=body, method='POST',
+                                     headers={'Content-Type': f'multipart/form-data; boundary={boundary}'})
+        return json.loads(import_opener.open(req, timeout=10).read().decode())
+
+    ann_vcf = b'BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Ann Lee\r\nTEL:5551234\r\nEMAIL:ann@x.test\r\nEND:VCARD\r\n'
+    test('vCard import creates the contact', lambda: assert_equal(upload_import('a.vcf', ann_vcf)['new'], 1))
+    test('re-importing the same vCard adds nothing', lambda: (
+        assert_equal(upload_import('a.vcf', ann_vcf)['new'], 0),
+        assert_equal(len(request('GET', '/api/v1/contacts', opener=import_opener)), 1)))
+    test('re-import reports the skipped duplicate', lambda: assert_equal(
+        upload_import('a.vcf', ann_vcf)['skipped_duplicates'], 1))
+    test('CSV from Excel (UTF-8 BOM) imports the name column', lambda: assert_equal(
+        upload_import('b.csv', b'\xef\xbb\xbfName,Phone\r\nBob Ray,555\r\n')['new'], 1))
+    test('short CSV row does not crash the import', lambda: assert_equal(
+        upload_import('c.csv', b'name,phone,tags\nCara,5550001\n')['new'], 1))
+    test('duplicates within one file are imported once', lambda: (
+        assert_equal(upload_import('d.csv', b'name,email\nDan Fox,dan@x.test\nDaniel Fox,dan@x.test\n')['new'], 1),
+        assert_equal(upload_import('d.csv', b'name,email\nDan Fox,dan@x.test\n')['skipped_duplicates'], 1)))
+    test('same name with a different email is imported and flagged as possible', lambda: (
+        assert_equal(upload_import('e.csv', b'name,email\nBob Ray,other@x.test\n')['new'], 1),
+        assert_equal(upload_import('f.csv', b'name,email\nBob Ray,third@x.test\n')['possible_duplicates'], 1)))
+    test('duplicates endpoint still reports a shared email', lambda: (
+        request('POST', '/api/v1/contacts', {'name': 'Eve One', 'email': 'shared@x.test'}, expect=201, opener=import_opener),
+        request('POST', '/api/v1/contacts', {'name': 'Eve One Two', 'email': 'SHARED@x.test'}, expect=201, opener=import_opener),
+        assert_in('email match', json.dumps(request('GET', '/api/v1/duplicates', opener=import_opener)))))
+
+    def preview_import(filename, data):
+        boundary = f'----rolodex-smoke-{time.time_ns()}'
+        body = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+                'Content-Type: application/octet-stream\r\n\r\n').encode() + data + f'\r\n--{boundary}--\r\n'.encode()
+        req = urllib.request.Request(BASE + '/api/v1/import/preview', data=body, method='POST',
+                                     headers={'Content-Type': f'multipart/form-data; boundary={boundary}'})
+        return json.loads(import_opener.open(req, timeout=10).read().decode())
+
+    def preview_writes_nothing():
+        before = len(request('GET', '/api/v1/contacts', opener=import_opener))
+        preview = preview_import('p.csv', b'name,email\nPam Quill,pam@x.test\nDan Fox,dan@x.test\n')
+        assert_equal(preview['counts']['new'], 1)
+        assert_equal(preview['counts']['skipped'], 1)
+        assert_equal(len(request('GET', '/api/v1/contacts', opener=import_opener)), before)
+    test('import preview reports counts without writing', preview_writes_nothing)
+    test('import preview explains why a row is skipped', lambda: assert_in(
+        'same email', json.dumps(preview_import('p.csv', b'name,email\nDan Fox,dan@x.test\n')['rows'])))
+
+    def merge_keeps_survivor():
+        keep = request('POST', '/api/v1/contacts', {'name': 'Hal Keep', 'phone': '111', 'notes': 'kept note'}, expect=201, opener=import_opener)['contact']
+        other = request('POST', '/api/v1/contacts', {'name': 'Hal Keep', 'phone': '222', 'email': 'hal@x.test', 'notes': 'other note'}, expect=201, opener=import_opener)['contact']
+        merged = request('POST', '/api/v1/merge', {'primary_id': keep['id'], 'secondary_id': other['id'], 'keep_existing': True}, opener=import_opener)['contact']
+        assert_equal(merged['phone'], '111')
+        assert_equal(merged['email'], 'hal@x.test')
+        assert_in('kept note', merged['notes'])
+        assert_in('other note', merged['notes'])
+    test('merge with keep_existing keeps the survivor and fills blanks', merge_keeps_survivor)
+
     # ── 6. Bulk operations ────────────────────────────────────────────
     print('[Bulk Operations]')
     bulk_contact_id = None
