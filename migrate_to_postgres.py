@@ -1,111 +1,113 @@
 #!/usr/bin/env python3
-"""Migrate contacts from JSON to PostgreSQL."""
+"""Import contacts.json into Postgres for one account, or adopt contacts that have no owner.
+
+    python3 migrate_to_postgres.py --owner you@example.com                  # import ./contacts.json
+    python3 migrate_to_postgres.py --owner you@example.com --file old.json
+    python3 migrate_to_postgres.py --claim-orphans --owner you@example.com
+
+Connects exactly like the app (DATABASE_URL / POSTGRES_URL, else ROLODEX_DB_*), and importing
+the app brings the schema up to date first. The account must exist: sign up at / before running.
+Exit codes: 0 done, 1 bad input file, 2 no such account (or bad arguments).
+"""
+import argparse
 import json
 import os
-import psycopg2
-import psycopg2.extras
+import sys
 
-DB_CONFIG = {
-    'host': os.environ.get('ROLODEX_DB_HOST', 'localhost'),
-    'port': int(os.environ.get('ROLODEX_DB_PORT', '5432')),
-    'dbname': os.environ.get('ROLODEX_DB_NAME', 'rolodex'),
-    'user': os.environ.get('ROLODEX_DB_USER', 'rolodex'),
-    'password': os.environ.get('ROLODEX_DB_PASSWORD', 'rolodex123'),
-}
+from app import get_db_conn
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONTACTS_PATH = os.path.join(BASE_DIR, 'contacts.json')
 
-CREATE_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS contacts (
-    id VARCHAR(255) PRIMARY KEY,
-    name VARCHAR(255) NOT NULL,
-    phone VARCHAR(100),
-    email VARCHAR(255),
-    address TEXT,
-    tags JSONB DEFAULT '[]',
-    notes TEXT,
-    avatar TEXT,
-    birthday VARCHAR(50),
-    social JSONB DEFAULT '{}',
-    linked_contacts JSONB DEFAULT '[]',
-    starred BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP NOT NULL
-);
-"""
 
-def get_conn():
-    return psycopg2.connect(**DB_CONFIG)
+def owner_id(cur, email):
+    cur.execute("SELECT id FROM users WHERE email = %s", (email,))
+    row = cur.fetchone()
+    if not row:
+        print(f"migrate: no account for {email}; sign up at / first, then rerun", file=sys.stderr)
+        sys.exit(2)
+    return row[0]
 
-def init_db():
-    conn = get_conn()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(CREATE_TABLE_SQL)
-        conn.commit()
-        print("Table 'contacts' initialized.")
-    finally:
-        conn.close()
 
-def migrate_json():
-    if not os.path.exists(CONTACTS_PATH):
-        print("No contacts.json found — nothing to migrate.")
-        return
+def claim_orphans(cur, uid, email):
+    # One statement, so a failure leaves every row as it was
+    cur.execute("UPDATE contacts SET user_id = %s WHERE user_id IS NULL", (uid,))
+    print(f"migrate: assigned {cur.rowcount} contacts with no owner to {email}")
 
-    with open(CONTACTS_PATH) as f:
+
+def import_json(cur, uid, email, path):
+    if not os.path.exists(path):
+        print(f"migrate: {path} not found; nothing to import", file=sys.stderr)
+        sys.exit(1)
+    with open(path) as f:
         data = json.load(f)
+    if not isinstance(data, list):
+        print(f"migrate: {path} must hold a JSON list of contacts", file=sys.stderr)
+        sys.exit(1)
 
-    if not isinstance(data, list) or not data:
-        print("contacts.json is empty or invalid — nothing to migrate.")
-        return
+    inserted = skipped = 0
+    for c in data:
+        cid = c.get('id') if isinstance(c, dict) else None
+        if not cid:
+            skipped += 1
+            continue
+        cur.execute(
+            """
+            INSERT INTO contacts
+            (id, name, phone, email, address, tags, notes, avatar, birthday,
+             social, linked_contacts, starred, created_at, updated_at, company, title, user_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO NOTHING
+            """,
+            (
+                cid,
+                c.get('name', ''),
+                c.get('phone', ''),
+                c.get('email', ''),
+                c.get('address', ''),
+                json.dumps(c.get('tags', [])),
+                c.get('notes', ''),
+                c.get('avatar', ''),
+                c.get('birthday', ''),
+                json.dumps(c.get('social', {})),
+                json.dumps(c.get('linked_contacts', [])),
+                bool(c.get('starred', False)),
+                c.get('createdAt', '1970-01-01T00:00:00'),
+                c.get('updatedAt', '1970-01-01T00:00:00'),
+                c.get('company', ''),
+                c.get('title', ''),
+                uid,
+            ),
+        )
+        if cur.rowcount:
+            inserted += 1
+        else:
+            skipped += 1
+    print(f"migrate: imported {inserted} contacts for {email}, skipped {skipped} (already exist or missing id)")
 
-    conn = get_conn()
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--owner', required=True, help='email of the account that will own the contacts')
+    parser.add_argument('--claim-orphans', action='store_true',
+                        help='adopt contacts saved before accounts existed instead of importing a file')
+    parser.add_argument('--file', default=os.path.join(BASE_DIR, 'contacts.json'),
+                        help='JSON file to import (default: contacts.json next to this script)')
+    args = parser.parse_args()
+    # Sign-up stores emails lowercased
+    email = args.owner.strip().lower()
+
+    conn = get_db_conn()
     try:
         with conn.cursor() as cur:
-            inserted = 0
-            skipped = 0
-            for c in data:
-                cid = c.get('id')
-                if not cid:
-                    skipped += 1
-                    continue
-                # Check if already exists
-                cur.execute("SELECT 1 FROM contacts WHERE id = %s", (cid,))
-                if cur.fetchone():
-                    skipped += 1
-                    continue
-
-                cur.execute(
-                    """
-                    INSERT INTO contacts
-                    (id, name, phone, email, address, tags, notes, avatar, birthday,
-                     social, linked_contacts, starred, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        cid,
-                        c.get('name', ''),
-                        c.get('phone', ''),
-                        c.get('email', ''),
-                        c.get('address', ''),
-                        json.dumps(c.get('tags', [])),
-                        c.get('notes', ''),
-                        c.get('avatar', ''),
-                        c.get('birthday', ''),
-                        json.dumps(c.get('social', {})),
-                        json.dumps(c.get('linked_contacts', [])),
-                        bool(c.get('starred', False)),
-                        c.get('createdAt', '1970-01-01T00:00:00'),
-                        c.get('updatedAt', '1970-01-01T00:00:00')
-                    )
-                )
-                inserted += 1
+            uid = owner_id(cur, email)
+            if args.claim_orphans:
+                claim_orphans(cur, uid, email)
+            else:
+                import_json(cur, uid, email, args.file)
         conn.commit()
-        print(f"Migrated {inserted} contacts, skipped {skipped} (already exist or missing id).")
     finally:
         conn.close()
+
 
 if __name__ == '__main__':
-    init_db()
-    migrate_json()
+    main()
