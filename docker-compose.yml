@@ -4,7 +4,6 @@ services:
   # ── HashiCorp Vault (optional secrets management) ──────────────────────
   vault:
     image: hashicorp/vault:1.14
-    container_name: rolodex-vault
     profiles:
       - with-vault
     ports:
@@ -24,7 +23,6 @@ services:
   # ── PostgreSQL (contacts store) ───────────────────────────────────────
   db:
     image: docker.io/library/postgres:16-alpine
-    container_name: rolodex-db
     environment:
       POSTGRES_DB: "${ROLODEX_DB_NAME:-rolodex}"
       POSTGRES_USER: "${ROLODEX_DB_USER:-rolodex}"
@@ -46,10 +44,10 @@ services:
   app:
     build:
       context: .
-    container_name: rolodex-app
     ports:
-      # Host loopback only: the API has no authentication
-      - "127.0.0.1:${ROLODEX_PORT:-5000}:5000"
+      # Host loopback only; put a reverse proxy in front to expose it. An empty ROLODEX_PORT
+      # publishes an ephemeral host port (./runner.sh uses that so parallel checkouts never collide)
+      - "127.0.0.1:${ROLODEX_PORT-5000}:5000"
     environment:
       ROLODEX_PORT: "5000"
       ROLODEX_HOST: "0.0.0.0"
@@ -70,13 +68,11 @@ services:
       VAULT_ADDR: "${VAULT_ADDR:-}"
       VAULT_TOKEN: "${VAULT_TOKEN:-}"
       ROLODEX_VAULT_PATH: "${ROLODEX_VAULT_PATH:-secret/rolodex/config}"
-    volumes:
-      # Persist contacts data outside the container
-      - rolodex-data:/data:z
     working_dir: /app
     command: ["gunicorn", "-c", "gunicorn_config.py", "wsgi_entry:app"]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      # /ready fails while the database is unreachable; /health always answers 200
+      test: ["CMD", "curl", "-f", "http://localhost:5000/ready"]
       interval: 30s
       timeout: 5s
       start_period: 10s
@@ -90,5 +86,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  rolodex-data:
   rolodex-pgdata:
