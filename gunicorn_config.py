@@ -11,7 +11,7 @@ import os
 import multiprocessing
 
 # ── Server socket ──────────────────────────────────────────────────────
-# Loopback by default (the API has no auth); containers set ROLODEX_HOST=0.0.0.0
+# Loopback by default; containers set ROLODEX_HOST=0.0.0.0 and publish to host loopback
 bind = f"{os.environ.get('ROLODEX_HOST', '127.0.0.1')}:{os.environ.get('ROLODEX_PORT', '5000')}"
 
 # ── Worker processes ───────────────────────────────────────────────────

@@ -35,7 +35,7 @@ EXPOSE 5000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:5000/health || exit 1
+    CMD curl -f http://localhost:5000/ready || exit 1
 
 # Run with gunicorn in production mode
 CMD ["gunicorn", "-c", "gunicorn_config.py", "wsgi_entry:app"]
