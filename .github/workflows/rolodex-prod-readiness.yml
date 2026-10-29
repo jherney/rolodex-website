@@ -14,27 +14,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
-      - name: Build and start stack
-        run: |
-          docker compose up -d --build
-      - name: Health check
-        run: |
-          # Fail unless the app reports a healthy database connection within 60s
-          for i in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:5000/health | jq -e '.status == "healthy" and .db_connected == true' >/dev/null; then
-              echo "app healthy"
-              break
-            fi
-            if [ "$i" = 30 ]; then
-              echo "app never became healthy"
-              docker compose logs app | tail -50
-              exit 1
-            fi
-            sleep 2
-          done
-          # The vintage frontend must also be served
-          curl -sf -o /dev/null http://127.0.0.1:5000/vintage/
+      - name: Build, verify and tear down (the same command agents run)
+        # Fresh stack, wait for /ready, smoke tests, failure-path checks, then removal.
+        # The last line is a RESULT line; the exit code names the failing step.
+        run: ./runner.sh test
       - name: Teardown
         if: always()
-        run: |
-          docker compose down -v
+        run: ./runner.sh down
