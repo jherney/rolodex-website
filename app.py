@@ -12,6 +12,7 @@ import urllib.request
 from datetime import datetime
 import psycopg2
 import psycopg2.extras
+from werkzeug.exceptions import InternalServerError
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONTACTS_PATH = os.path.join(BASE_DIR, 'contacts.json')
@@ -24,19 +25,18 @@ app = Flask(__name__)
 # ── Production configuration ───────────────────────────────────────────
 # All configurable via environment variables for 12-factor compliance
 PORT = int(os.environ.get('ROLODEX_PORT', '5000'))
-# Loopback by default: the API has no authentication, so don't expose it to the network
+# Loopback by default; put a reverse proxy in front before exposing it to a network
 HOST = os.environ.get('ROLODEX_HOST', '127.0.0.1')
 DEBUG = os.environ.get('ROLODEX_DEBUG', '0').lower() in ('1', 'true', 'yes')
-# Signs the session cookie. Required on Vercel (serverless instances must share it);
-# locally a random key is generated, so sessions end when the server restarts.
+# Signs the session cookie. Required on Vercel and in production. Elsewhere, when unset,
+# init_db() generates one key and stores it in Postgres, so every worker and every restart
+# shares it. Anyone who can read the database can then forge sessions.
+# This check must stay above init_db(): a misconfigured production deploy fails before any DB access.
 SECRET_KEY = os.environ.get('ROLODEX_SECRET_KEY', '')
-if not SECRET_KEY:
-    if os.environ.get('VERCEL') or os.environ.get('ROLODEX_ENV') == 'production':
-        raise RuntimeError('ROLODEX_SECRET_KEY must be set in production')
-    SECRET_KEY = secrets.token_hex(32)
+if not SECRET_KEY and (os.environ.get('VERCEL') or os.environ.get('ROLODEX_ENV') == 'production'):
+    raise RuntimeError('ROLODEX_SECRET_KEY must be set in production')
 # Empty = same-origin only (both bundled frontends are served by this app)
 CORS_ORIGIN = os.environ.get('ROLODEX_CORS_ORIGIN', '')
-app.secret_key = SECRET_KEY
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_SECURE'] = bool(os.environ.get('VERCEL') or os.environ.get('ROLODEX_SECURE_COOKIES'))
@@ -99,7 +99,7 @@ def get_db_conn():
     return psycopg2.connect(**DB_CONFIG)
 
 def init_db():
-    """Create contacts table if it doesn't exist."""
+    """Create or upgrade the schema. Returns the stored session key when ROLODEX_SECRET_KEY is unset."""
     conn = get_db_conn()
     try:
         with conn.cursor() as cur:
@@ -175,12 +175,53 @@ def init_db():
                 )
             """)
             cur.execute("CREATE INDEX IF NOT EXISTS activities_contact_idx ON activities (contact_id)")
+            # One session key for every worker and restart; the advisory lock above makes
+            # concurrent first boots agree on a single row
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key VARCHAR(64) PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+            """)
+            stored_key = None
+            if not SECRET_KEY:
+                cur.execute(
+                    "INSERT INTO app_settings (key, value) VALUES ('secret_key', %s) ON CONFLICT (key) DO NOTHING",
+                    (secrets.token_hex(32),))
+                cur.execute("SELECT value FROM app_settings WHERE key = 'secret_key'")
+                stored_key = cur.fetchone()[0]
+            cur.execute("SELECT count(*) FROM contacts WHERE user_id IS NULL")
+            orphans = cur.fetchone()[0]
         conn.commit()
     finally:
         conn.close()
+    if orphans:
+        app.logger.warning(
+            '%d contacts have no owner and are invisible; run: '
+            'python3 migrate_to_postgres.py --claim-orphans --owner EMAIL', orphans)
+    return stored_key
+
+def _db_unreachable_message(error):
+    """One line naming the database we tried (never its password) and how to fix it."""
+    if DATABASE_URL:
+        parts = urllib.parse.urlsplit(DATABASE_URL)
+        host, port, user = parts.hostname, parts.port or 5432, parts.username
+    else:
+        host, port, user = DB_CONFIG['host'], DB_CONFIG['port'], DB_CONFIG['user']
+    first_line = str(error).strip().splitlines()[0] if str(error).strip() else type(error).__name__
+    reason = first_line.rsplit('failed: ', 1)[-1]
+    message = (f"rolodex: can't reach Postgres at {host}:{port} as user \"{user}\" ({reason}). "
+               "Set DATABASE_URL, or ROLODEX_DB_HOST/PORT/NAME/USER/PASSWORD.")
+    if not os.environ.get('VERCEL'):
+        message += ' Or run ./runner.sh up for a throwaway stack with its own database.'
+    return message
 
 # Initialize DB on first import (safe to call multiple times)
-init_db()
+try:
+    _stored_key = init_db()
+except psycopg2.OperationalError as e:
+    raise RuntimeError(_db_unreachable_message(e)) from e
+app.secret_key = SECRET_KEY or _stored_key
 
 def _new_id():
     return datetime.now().strftime('%Y%m%d%H%M%S%f') + os.urandom(4).hex()
@@ -197,7 +238,12 @@ def login_required(view):
     @wraps(view)
     def wrapper(*args, **kwargs):
         if not current_user_id():
-            return jsonify({'error': 'login required'}), 401
+            # The frontends show `error` to people; `hint` is for scripts and agents
+            return jsonify({
+                'error': 'login required',
+                'hint': 'sign in with POST /api/v1/auth/login {"email", "password"} and send the '
+                        'session cookie back; new account: POST /api/v1/auth/signup',
+            }), 401
         return view(*args, **kwargs)
     return wrapper
 
@@ -295,7 +341,24 @@ def readiness():
         conn.close()
         return jsonify({'status': 'ready'})
     except Exception as e:
-        return jsonify({'status': 'not_ready', 'error': str(e)}), 503
+        # Unauthenticated callers get no hostnames; the detail goes to the server log
+        app.logger.warning('readiness check failed: %s', e)
+        return jsonify({'status': 'not_ready', 'error': 'database unreachable'}), 503
+
+# ── Server errors ──────────────────────────────────────────────────────
+
+def _server_error(message, error=None):
+    """A 500 for API callers: a short message plus an id that matches one server log line."""
+    error_id = secrets.token_hex(4)
+    app.logger.error('error id=%s path=%s', error_id, request.path, exc_info=error)
+    return jsonify({'error': message, 'id': error_id}), 500
+
+@app.errorhandler(InternalServerError)
+def handle_internal_error(e):
+    if not request.path.startswith('/api/'):
+        return e
+    # Flask has already logged the traceback for unhandled exceptions
+    return _server_error('internal error')
 
 # ── Static file serving ────────────────────────────────────────────────
 
@@ -986,7 +1049,7 @@ def api_import():
         conn.commit()
     except Exception as e:
         conn.rollback()
-        return jsonify({'error': f'import failed: {str(e)}'}), 500
+        return _server_error('import failed; try again', e)
     finally:
         conn.close()
 
@@ -1186,7 +1249,7 @@ def ai_enrich():
         })
 
     except Exception as e:
-        return jsonify({'error': f'AI enrichment failed: {str(e)}'}), 500
+        return _server_error('AI enrichment failed', e)
 
 
 def extract_json(text):
@@ -1353,7 +1416,7 @@ def ai_search():
         return jsonify(results)
 
     except Exception as e:
-        return jsonify({'error': f'AI search failed: {str(e)}'}), 500
+        return _server_error('AI search failed', e)
 
 
 # ── Tags discovery ──────────────────────────────────────────────────────

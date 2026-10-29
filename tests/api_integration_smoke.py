@@ -67,20 +67,40 @@ def sign_up(email, password='correct-horse-battery'):
     return opener
 
 
+def preflight():
+    """Exit 2 with one actionable line when nothing answers at BASE_URL."""
+    try:
+        urllib.request.urlopen(BASE + '/health', timeout=5).read()
+    except urllib.error.HTTPError:
+        pass  # something is serving; the tests will report what is wrong
+    except (urllib.error.URLError, OSError) as e:
+        reason = getattr(e, 'reason', e)
+        print(f'smoke: no server at {BASE} ({reason}). Start one with ./runner.sh up, or set BASE_URL.',
+              file=sys.stderr)
+        sys.exit(2)
+
+
 def main():
     print(f'Rolodex API Integration Smoke Tests')
     print(f'Target: {BASE}')
     print()
+    preflight()
 
     # Each run uses a fresh account, so test data never mixes with real accounts
     global OPENER
     run_id = str(int(time.time() * 1000))
-    OPENER = sign_up(f'smoke-{run_id}@example.test')
-    other = sign_up(f'smoke-other-{run_id}@example.test')
+    try:
+        OPENER = sign_up(f'smoke-{run_id}@example.test')
+        other = sign_up(f'smoke-other-{run_id}@example.test')
+    except Exception as e:
+        print(f'  ✗ sign up test accounts: {e}')
+        print(f'smoke: sign-up failed ({e}) at {BASE}', file=sys.stderr)
+        sys.exit(1)
     anon = new_opener()
 
     print('[Accounts]')
     test('signed-out contact list returns 401', lambda: request('GET', '/api/v1/contacts', expect=401, opener=anon))
+    test('401 body names the sign-in call', lambda: assert_in('/api/v1/auth/login', request('GET', '/api/v1/contacts', expect=401, opener=anon)['hint']))
     test('signed-out /get_contacts returns 401', lambda: request('GET', '/get_contacts', expect=401, opener=anon))
     test('wrong password returns 401', lambda: request('POST', '/api/v1/auth/login', {'email': f'smoke-{run_id}@example.test', 'password': 'wrong-password-here'}, expect=401, opener=anon))
     test('duplicate signup returns 409 without revealing the account', lambda: assert_equal(request('POST', '/api/v1/auth/signup', {'email': f'smoke-{run_id}@example.test', 'password': 'correct-horse-battery'}, expect=409, opener=anon)['error'], "Couldn't create an account with that email. If you already have one, sign in instead."))
