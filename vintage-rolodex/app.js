@@ -93,11 +93,13 @@
   const store = {
     mode: 'local',
     col: null,
-    async put(list) {
+    async put(list, isNew = false) {
       if (this.mode === 'signedout') return;
       if (this.mode === 'local') return saveLocal();
       for (const c of list) {
-        if (this.mode === 'server') {
+        if (this.mode === 'server' && isNew) {
+          await api('POST', API, { id: c.id, ...toServer(c) });
+        } else if (this.mode === 'server') {
           try {
             await api('PUT', `${API}/${encodeURIComponent(c.id)}`, toServer(c));
           } catch (err) {
@@ -389,14 +391,19 @@
     const present = new Set(view.map(letterOf));
     const current = view[Math.round(pos)];
     const curLetter = current ? letterOf(current) : null;
-    tabsEl.textContent = '';
-    for (const L of LETTERS) {
-      const b = el('button', L === curLetter ? 'active' : '', L);
-      b.type = 'button';
-      b.disabled = !present.has(L);
-      b.addEventListener('click', () => jumpToLetter(L));
-      tabsEl.appendChild(b);
+    if (!tabsEl.children.length) {
+      for (const L of LETTERS) {
+        const b = el('button', '', L);
+        b.type = 'button';
+        b.addEventListener('click', () => jumpToLetter(L));
+        tabsEl.appendChild(b);
+      }
     }
+    LETTERS.forEach((L, i) => {
+      const b = tabsEl.children[i];
+      b.disabled = !present.has(L);
+      b.classList.toggle('active', L === curLetter);
+    });
   }
 
   // ---------- 3D layout ----------
@@ -481,8 +488,12 @@
   let soundOn = true;
   try { soundOn = localStorage.getItem(SOUND_KEY) !== 'off'; } catch { /* default on */ }
   let audio = null;
+  let lastTickAt = 0;
   function tick() {
     if (!soundOn) return;
+    const now = performance.now();
+    if (now - lastTickAt < 35) return;
+    lastTickAt = now;
     try {
       audio = audio || new (window.AudioContext || window.webkitAudioContext)();
       if (audio.state === 'suspended') audio.resume();
@@ -551,12 +562,19 @@
       stage.classList.remove('dragging');
       if (moved) goTo(pos);
       else if (elm === stage) clickCard(e);
+      else if (elm === knob) goTo(target + 1);
     };
     elm.addEventListener('pointerup', end);
     elm.addEventListener('pointercancel', end);
   }
   dragSpinner(stage, 46, 'y');
   dragSpinner(knob, 30, 'xy');
+  knob.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    e.stopPropagation(); // the global handler would open the editor on Enter
+    goTo(target + 1);
+  });
 
   // Browser hit-testing is unreliable inside the 3D drum (it reports the drum itself),
   // so test the projected card rects directly: open card first, then those behind it.
@@ -651,7 +669,7 @@
     e.preventDefault();
     const i = contacts.findIndex((x) => x.id === c.id);
     if (i >= 0) contacts[i] = c; else contacts.push(c);
-    persist(store.put([c]));
+    persist(store.put([c], i < 0));
     dialog.close();
     if (searchEl.value && !FIELDS.some((f) => c[f].toLowerCase().includes(searchEl.value.trim().toLowerCase()))) {
       searchEl.value = '';
@@ -842,10 +860,10 @@
     }
   }
 
-  function renderDuplicates(pairs) {
+  function renderDuplicates(pairs, afterMerge = false) {
     $('#duplicates-summary').textContent = pairs.length
       ? `${pairs.length} ${pairs.length === 1 ? 'pair' : 'pairs'} may be the same person. Merging keeps the card you choose and fills its blanks from the other.`
-      : 'No possible duplicates left.';
+      : afterMerge ? 'No possible duplicates left.' : 'No possible duplicates found.';
     const list = $('#duplicates-rows');
     list.textContent = '';
     for (const pair of pairs) {
@@ -896,7 +914,7 @@
       });
       $('#merge-review').close();
       await refreshServerCards();
-      if ($('#duplicates-review').open) renderDuplicates(await api('GET', '/api/v1/duplicates?threshold=0.7'));
+      if ($('#duplicates-review').open) renderDuplicates(await api('GET', '/api/v1/duplicates?threshold=0.7'), true);
       toast(`Merged into ${primary.name || 'a card'}.`);
     } catch {
       toast('Merge failed.');

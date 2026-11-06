@@ -16,7 +16,7 @@
         <span class="sr">Search</span>
         <input id="search" type="search" placeholder="Find a card…" autocomplete="off">
       </label>
-      <button id="btn-new" class="btn primary" title="New card (N)">+ New Card</button>
+      <button id="btn-new" class="btn primary" title="New card (+)">+ New Card</button>
       <button id="btn-sound" class="btn" title="Toggle click sound" aria-pressed="true">🔊</button>
       <button id="btn-export" class="btn" title="Export contacts as JSON">Export</button>
       <label class="btn" title="Import contacts from a JSON, CSV or vCard file">Import<input id="file-import" type="file" accept=".json,.csv,.vcf,application/json,text/csv,text/vcard" hidden></label>
@@ -33,7 +33,7 @@
       <div class="stage" id="stage" tabindex="-1" aria-label="Rolodex cards. Use arrow keys to flip.">
         <div class="drum" id="drum"></div>
       </div>
-      <div class="wheel right" id="knob" title="Drag to spin"><div class="hub"><div class="grip"></div></div></div>
+      <div class="wheel right" id="knob" role="button" tabindex="0" aria-label="Spin the cards. Click or press Enter for the next card; drag to spin." title="Click for next card, drag to spin"><div class="hub"><div class="grip"></div></div></div>
       <div class="base"><div class="counter" id="counter">0 / 0</div></div>
     </div>
 
@@ -54,7 +54,7 @@
     <form method="dialog" id="editor-form" class="index-card form-card">
       <div class="card-head">
         <h2 id="editor-title">New Card</h2>
-        <label class="star-toggle"><input type="checkbox" name="starred"><span>★</span></label>
+        <label class="star-toggle"><input type="checkbox" name="starred" aria-label="Starred"><span>★</span></label>
       </div>
       <div class="grid">
         <label>First name<input name="first" autocomplete="off"></label>
