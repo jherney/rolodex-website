@@ -56,7 +56,7 @@ pip install -r requirements.txt
 gunicorn -c gunicorn_config.py wsgi_entry:app
 ```
 
-**Vercel**: the project is linked (`.vercel/`). Set `ROLODEX_SECRET_KEY` and connect a Postgres integration (Neon sets `DATABASE_URL`, Supabase sets `POSTGRES_URL`). The app refuses to start on Vercel without `ROLODEX_SECRET_KEY`.
+**Vercel**: the project is linked (`.vercel/`). Set `ROLODEX_SECRET_KEY` and connect a Postgres integration (Neon sets `DATABASE_URL`, Supabase sets `POSTGRES_URL`). The app refuses to start on Vercel without `ROLODEX_SECRET_KEY`. `vercel.json` schedules a daily cron on `/ready` (a `SELECT 1`) so Supabase's free tier doesn't pause the project for inactivity.
 
 The app binds to loopback by default. To reach it from other machines, put a reverse proxy with HTTPS in front and set `ROLODEX_SECURE_COOKIES=1`.
 

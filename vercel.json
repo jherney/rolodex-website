@@ -1,0 +1,5 @@
+{
+  "crons": [
+    { "path": "/ready", "schedule": "0 12 * * *" }
+  ]
+}
