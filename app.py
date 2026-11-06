@@ -51,20 +51,41 @@ DB_CONFIG = {
     'password': os.environ.get('ROLODEX_DB_PASSWORD', 'rolodex123'),
 }
 
-# Fireworks AI config — recommend setting via env in production
-# Fallback to file if env var is missing or appears truncated (contains '...')
-FIREWORKS_API_KEY = os.environ.get('FIREWORKS_API_KEY', '')
-if not FIREWORKS_API_KEY or '...' in FIREWORKS_API_KEY:
-    try:
-        with open('/tmp/fireworks_key.txt', 'r') as f:
-            FIREWORKS_API_KEY = f.read().strip()
-    except Exception:
-        pass
+# AI providers. Both speak the OpenAI-style /chat/completions API.
+# Set FIREWORKS_API_KEY (or OPENAI_API_KEY); DEFAULT_AI_PROVIDER picks which one the app uses.
+def _csv_env(name, default):
+    return [m.strip() for m in os.environ.get(name, default).split(',') if m.strip()]
 
-# Use a model that follows JSON-only instructions better
-FIREWORKS_MODEL = os.environ.get('FIREWORKS_MODEL', 'accounts/fireworks/models/deepseek-v4-flash')
+def _clean_key(key):
+    key = key.strip()
+    return '' if '...' in key else key  # a key containing '...' was truncated
 
-FIREWORKS_API = os.environ.get('FIREWORKS_API_URL', 'https://api.fireworks.ai/inference/v1')
+AI_PROVIDERS = {
+    'fireworks': {
+        'api_key': _clean_key(os.environ.get('FIREWORKS_API_KEY', '')),
+        'base_url': os.environ.get('FIREWORKS_API_URL', 'https://api.fireworks.ai/inference/v1'),
+        'models': _csv_env('FIREWORKS_MODELS', os.environ.get('FIREWORKS_MODEL', 'accounts/fireworks/models/deepseek-v4-flash')),
+    },
+    'openai': {
+        'api_key': _clean_key(os.environ.get('OPENAI_API_KEY', '')),
+        'base_url': os.environ.get('OPENAI_BASE_URL', 'https://api.openai.com/v1'),
+        'models': _csv_env('OPENAI_MODELS', 'gpt-4o-mini,gpt-4o'),
+    },
+}
+
+DEFAULT_AI_PROVIDER = os.environ.get('DEFAULT_AI_PROVIDER', 'fireworks')
+if DEFAULT_AI_PROVIDER not in AI_PROVIDERS:
+    DEFAULT_AI_PROVIDER = 'fireworks'
+_default_model = os.environ.get('DEFAULT_AI_MODEL', '').strip()
+if _default_model:
+    # An explicit default model is always allowed, and is listed first.
+    _models = AI_PROVIDERS[DEFAULT_AI_PROVIDER]['models']
+    AI_PROVIDERS[DEFAULT_AI_PROVIDER]['models'] = [_default_model] + [m for m in _models if m != _default_model]
+
+AI_PROVIDER = AI_PROVIDERS[DEFAULT_AI_PROVIDER]
+AI_API_KEY = AI_PROVIDER['api_key']
+AI_API = AI_PROVIDER['base_url']
+AI_MODEL = AI_PROVIDER['models'][0] if AI_PROVIDER['models'] else ''
 
 def _set_cors_headers(response):
     if CORS_ORIGIN:
@@ -327,7 +348,7 @@ def health():
     return jsonify({
         'status': 'healthy' if db_ok else 'degraded',
         'db_connected': db_ok,
-        'fireworks_configured': bool(FIREWORKS_API_KEY),
+        'fireworks_configured': bool(AI_API_KEY),
         'version': '2.1.0'
     })
 
@@ -1197,15 +1218,26 @@ def export_vcard(contacts):
 @app.route('/api/v1/ai/enrich', methods=['POST'])
 @login_required
 def ai_enrich():
-    """Use Fireworks AI to enrich a contact: suggest tags, find duplicates."""
+    """Use AI to enrich a contact: suggest tags, find duplicates."""
     data = request.get_json(silent=True)
     if not data or not data.get('name'):
         return jsonify({'error': 'name required'}), 400
 
+    # Optional per-request provider/model; anything unrecognised falls back to the defaults.
+    provider = data.get('provider')
+    if not isinstance(provider, str) or provider not in AI_PROVIDERS:
+        provider = DEFAULT_AI_PROVIDER
+    cfg = AI_PROVIDERS[provider]
+    model = data.get('model')
+    if not isinstance(model, str) or model not in cfg['models']:
+        model = cfg['models'][0] if cfg['models'] else ''
+    if not cfg['api_key'] or not model:
+        return jsonify({'error': 'AI is not configured'}), 500
+
     prompt = (
-        "You are a contact management AI. Output ONLY valid JSON with these exact keys:\n"
-        "{\"tags\":[\"example1\",\"example2\"],\"summary\":\"Example summary.\",\"category\":\"professional\"}\n\n"
-        "Contact:\n"
+        "You are a contact management AI. Output ONLY valid JSON with these exact keys: "
+        '{"tags":["example1","example2"],"summary":"Example summary.","category":"professional"}'
+        "\n\nContact:\n"
         f"  Name: {data.get('name','')}\n"
         f"  Phone: {data.get('phone','')}\n"
         f"  Email: {data.get('email','')}\n"
@@ -1216,7 +1248,7 @@ def ai_enrich():
     )
     try:
         payload = json.dumps({
-            "model": FIREWORKS_MODEL,
+            "model": model,
             "messages": [
                 {"role": "system", "content": "You are a JSON-only API. Output ONLY valid JSON matching the exact schema. No explanations, no markdown, no code fences."},
                 {"role": "user", "content": prompt}
@@ -1226,11 +1258,11 @@ def ai_enrich():
         }).encode('utf-8')
 
         req = urllib.request.Request(
-            f"{FIREWORKS_API}/chat/completions",
+            f"{cfg['base_url']}/chat/completions",
             data=payload,
             headers={
                 'Content-Type': 'application/json',
-                'Authorization': f'Bearer {FIREWORKS_API_KEY}'
+                'Authorization': f"Bearer {cfg['api_key']}"
             }
         )
 
@@ -1247,7 +1279,6 @@ def ai_enrich():
             'summary': enrichment.get('summary', ''),
             'category': enrichment.get('category', 'other')
         })
-
     except Exception as e:
         return _server_error('AI enrichment failed', e)
 
@@ -1293,7 +1324,7 @@ def ai_auto_categorize():
 
         try:
             payload = json.dumps({
-                "model": FIREWORKS_MODEL,
+                "model": AI_MODEL,
                 "messages": [
                     {"role": "system", "content": "Respond only with a JSON array of tag strings."},
                     {"role": "user", "content": prompt}
@@ -1303,11 +1334,11 @@ def ai_auto_categorize():
             }).encode('utf-8')
 
             req = urllib.request.Request(
-                f"{FIREWORKS_API}/chat/completions",
+                f"{AI_API}/chat/completions",
                 data=payload,
                 headers={
                     'Content-Type': 'application/json',
-                    'Authorization': f'Bearer {FIREWORKS_API_KEY}'
+                    'Authorization': f'Bearer {AI_API_KEY}'
                 }
             )
 
@@ -1379,7 +1410,7 @@ def ai_search():
 
     try:
         payload = json.dumps({
-            "model": FIREWORKS_MODEL,
+            "model": AI_MODEL,
             "messages": [
                 {"role": "system", "content": "You are a smart contact search assistant. Return only JSON arrays."},
                 {"role": "user", "content": prompt}
@@ -1389,11 +1420,11 @@ def ai_search():
         }).encode('utf-8')
 
         req = urllib.request.Request(
-            f"{FIREWORKS_API}/chat/completions",
+            f"{AI_API}/chat/completions",
             data=payload,
             headers={
                 'Content-Type': 'application/json',
-                'Authorization': f'Bearer {FIREWORKS_API_KEY}'
+                'Authorization': f'Bearer {AI_API_KEY}'
             }
         )
 

@@ -4,7 +4,7 @@
 
 - **What:** Review two security smells found during the 2026-10-28 DX review.
   1. `_client_ip()` (`app.py:381-383`) trusts `X-Forwarded-For` from any client. On a self-hosted install with no proxy, an attacker can rotate that header and skip the 20-failures-per-IP lock (the 5-per-email lock still holds). On Vercel the header is set by the platform, so the fix needs a trusted-proxy setting (for example, trust XFF only when `VERCEL` or a `ROLODEX_TRUSTED_PROXIES` value is set).
-  2. `app.py:55-62` falls back to reading the Fireworks API key from `/tmp/fireworks_key.txt`, a path any local user can write to.
+  2. ~~`app.py` fell back to reading the Fireworks API key from `/tmp/fireworks_key.txt`~~ (removed; the key now comes only from the environment).
 - **Why:** Brute-force protection is weaker than the code comments claim, and a planted key file redirects AI calls to someone else's account.
 - **Pros:** Closes real gaps before the app is exposed beyond loopback.
 - **Cons:** Must not break real client IPs on Vercel.

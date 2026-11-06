@@ -86,6 +86,12 @@ Sign-in cookies are signed with `ROLODEX_SECRET_KEY`. If you don't set it (local
 | `FIREWORKS_API_KEY` | _(empty)_ | Enables the AI endpoints; without it they return a 500 error |
 | `FIREWORKS_API_URL` | `https://api.fireworks.ai/inference/v1` | Fireworks API endpoint |
 | `FIREWORKS_MODEL` | `accounts/fireworks/models/deepseek-v4-flash` | Model used for enrichment and search |
+| `FIREWORKS_MODELS` | _(value of `FIREWORKS_MODEL`)_ | Comma-separated Fireworks models a request may pick; the first is the default |
+| `OPENAI_API_KEY` | _(empty)_ | Key for the optional OpenAI provider |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible endpoint |
+| `OPENAI_MODELS` | `gpt-4o-mini,gpt-4o` | Comma-separated OpenAI models; the first is the default |
+| `DEFAULT_AI_PROVIDER` | `fireworks` | Provider the AI endpoints use (`fireworks` or `openai`) |
+| `DEFAULT_AI_MODEL` | _(first model of the provider)_ | Overrides the default model |
 | `ROLODEX_WORKERS` | CPU cores × 2 + 1 | Gunicorn workers (`4` in Compose) |
 | `ROLODEX_TIMEOUT` | `30` | Gunicorn worker timeout, seconds |
 | `ROLODEX_KEEPALIVE` | `5` | Gunicorn keep-alive, seconds |
