@@ -29,3 +29,6 @@ rolodex-cache/
 # Vercel project link
 .vercel
 .env*
+
+# graphify output
+graphify-out/
