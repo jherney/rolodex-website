@@ -61,8 +61,6 @@ services:
       ROLODEX_DB_NAME: "${ROLODEX_DB_NAME:-rolodex}"
       ROLODEX_DB_USER: "${ROLODEX_DB_USER:-rolodex}"
       ROLODEX_DB_PASSWORD: "${ROLODEX_DB_PASSWORD:-rolodex123}"
-      # OpenAI (optional — set via .env or env file)
-      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       # Vault secrets (optional)
       VAULT_ADDR: "${VAULT_ADDR:-}"
       VAULT_TOKEN: "${VAULT_TOKEN:-}"

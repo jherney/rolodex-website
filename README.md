@@ -1,6 +1,6 @@
 # Rolodex Contacts
 
-A desk-rolodex style contact manager: Flask + PostgreSQL backend, per-account sign-in, and a vintage card-file UI served at `/` (and `/vintage/`). Import JSON, CSV or vCard with a preview, find and merge duplicates, keep reminders and an activity log per contact, and optionally enrich contacts with AI.
+A desk-rolodex style contact manager: Flask + PostgreSQL backend, per-account sign-in, and a vintage card-file UI served at `/` (and `/vintage/`). Import JSON, CSV or vCard with a preview, find and merge duplicates, keep reminders and and an activity log per contact.
 
 ## Quick start
 
@@ -83,10 +83,6 @@ Sign-in cookies are signed with `ROLODEX_SECRET_KEY`. If you don't set it (local
 | `ROLODEX_DB_USER` | `rolodex` | Database user |
 | `ROLODEX_DB_PASSWORD` | `rolodex123` | Database password; change it anywhere real |
 | `ROLODEX_VINTAGE_DIR` | `./vintage-rolodex` | Folder the UI is served from (`/app/vintage` in the image) |
-| `OPENAI_API_KEY` | _(empty)_ | Enables the AI endpoints; without it they return a 500 error |
-| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible endpoint |
-| `OPENAI_MODELS` | `gpt-4o-mini,gpt-4o` | Comma-separated OpenAI models; the first is the default |
-| `DEFAULT_AI_MODEL` | _(first model of the provider)_ | Overrides the default model |
 | `ROLODEX_WORKERS` | CPU cores × 2 + 1 | Gunicorn workers (`4` in Compose) |
 | `ROLODEX_TIMEOUT` | `30` | Gunicorn worker timeout, seconds |
 | `ROLODEX_KEEPALIVE` | `5` | Gunicorn keep-alive, seconds |
@@ -132,9 +128,6 @@ curl -s -b jar -H 'Content-Type: application/json' -d '{"name":"Ada Lovelace","e
 | POST | `/api/v1/reminders/:id/complete` | Mark a reminder done |
 | DELETE | `/api/v1/reminders/:id` | Delete a reminder |
 | GET/POST | `/api/v1/contacts/:id/activities` | List or log activities (`type`, `subject`) |
-| POST | `/api/v1/ai/enrich` | Suggest tags and a summary (needs `OPENAI_API_KEY`) |
-| POST | `/api/v1/ai/auto-categorize` | Tag all untagged contacts (needs `OPENAI_API_KEY`) |
-| POST | `/api/v1/ai/search` | Natural-language search (needs `OPENAI_API_KEY`) |
 | GET | `/get_contacts` | Legacy: all of your contacts |
 | POST | `/save_contacts` | Legacy and **destructive**: replaces all of your contacts with the posted list |
 | GET | `/health` | Liveness: always `200`; `status` is `healthy` or `degraded` |

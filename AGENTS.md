@@ -32,4 +32,3 @@ Flask + PostgreSQL app with per-account sign-in. The vintage desk-rolodex UI (`v
 - **Users and contacts**: every contact has a `user_id`; every query filters on the signed-in user. Emails are stored lowercased.
 - **Compose**: the `db` service isn't published to the host; the app reaches it as `db:5432`. On Fedora, bind mounts need `:z`.
 - **Vintage UI**: it splits the API's single `name` into first/last (last word = surname) and uses the `company`/`title` columns.
-- **AI features**: need `OPENAI_API_KEY`; without it the AI endpoints return 500.
