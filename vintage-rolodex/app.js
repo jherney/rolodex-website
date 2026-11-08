@@ -92,16 +92,10 @@
 
   const store = {
     mode: 'local',
-    col: null,
     async put(list, isNew = false) {
       if (this.mode === 'signedout') return;
       if (this.mode === 'local') return saveLocal();
       for (const c of list) {
-        if (this.mode !== 'server') {
-          const { id, ...body } = c;
-          await this.col.doc(id).set(body);
-          continue;
-        }
         const body = toServer(c);
         if (!isNew) {
           // Existing card: update it. A 404 means the server doesn't have it yet, so create it below.
@@ -118,8 +112,7 @@
     async remove(id) {
       if (this.mode === 'signedout') return;
       if (this.mode === 'local') return saveLocal();
-      if (this.mode === 'server') return api('DELETE', `${API}/${encodeURIComponent(id)}`);
-      await this.col.doc(id).delete();
+      return api('DELETE', `${API}/${encodeURIComponent(id)}`);
     },
   };
 
@@ -224,23 +217,7 @@
 
   async function connect() {
     if (onServer) return connectServer();
-    if (!inArtifact) return useLocal();
-    setStatus('Opening…');
-    const [db, user] = await Promise.all([window.claude.use('db'), window.claude.use('user')]);
-    const id = db && user ? await user.id() : null;
-    if (!id) return useLocal();
-    store.mode = 'account';
-    store.col = db.collection('data/users/' + id);
-    setStatus('Saved privately to your account');
-    store.col.onSnapshot((snap) => {
-      contacts = snap.docs.map((d) => normalize({ ...d.data(), id: d.id })).filter(Boolean);
-      loading = false;
-      rebuild(currentId());
-    }, () => {
-      loading = false;
-      setStatus('Can’t reach your saved cards');
-      rebuild(currentId());
-    });
+    return useLocal();
   }
 
   const FIELDS = ['first', 'last', 'company', 'title', 'phone', 'email', 'address', 'notes'];

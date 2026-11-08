@@ -51,8 +51,8 @@ DB_CONFIG = {
     'password': os.environ.get('ROLODEX_DB_PASSWORD', 'rolodex123'),
 }
 
-# AI providers. Both speak the OpenAI-style /chat/completions API.
-# Set FIREWORKS_API_KEY (or OPENAI_API_KEY); DEFAULT_AI_PROVIDER picks which one the app uses.
+# AI provider. It speaks the OpenAI-style /chat/completions API.
+# Set OPENAI_API_KEY to enable the AI endpoints.
 def _csv_env(name, default):
     return [m.strip() for m in os.environ.get(name, default).split(',') if m.strip()]
 
@@ -61,11 +61,6 @@ def _clean_key(key):
     return '' if '...' in key else key  # a key containing '...' was truncated
 
 AI_PROVIDERS = {
-    'fireworks': {
-        'api_key': _clean_key(os.environ.get('FIREWORKS_API_KEY', '')),
-        'base_url': os.environ.get('FIREWORKS_API_URL', 'https://api.fireworks.ai/inference/v1'),
-        'models': _csv_env('FIREWORKS_MODELS', os.environ.get('FIREWORKS_MODEL', 'accounts/fireworks/models/deepseek-v4-flash')),
-    },
     'openai': {
         'api_key': _clean_key(os.environ.get('OPENAI_API_KEY', '')),
         'base_url': os.environ.get('OPENAI_BASE_URL', 'https://api.openai.com/v1'),
@@ -73,9 +68,7 @@ AI_PROVIDERS = {
     },
 }
 
-DEFAULT_AI_PROVIDER = os.environ.get('DEFAULT_AI_PROVIDER', 'fireworks')
-if DEFAULT_AI_PROVIDER not in AI_PROVIDERS:
-    DEFAULT_AI_PROVIDER = 'fireworks'
+DEFAULT_AI_PROVIDER = 'openai'
 _default_model = os.environ.get('DEFAULT_AI_MODEL', '').strip()
 if _default_model:
     # An explicit default model is always allowed, and is listed first.
@@ -348,7 +341,7 @@ def health():
     return jsonify({
         'status': 'healthy' if db_ok else 'degraded',
         'db_connected': db_ok,
-        'fireworks_configured': bool(AI_API_KEY),
+        'ai_configured': bool(AI_API_KEY),
         'version': '2.1.0'
     })
 
@@ -1213,7 +1206,7 @@ def export_vcard(contacts):
     return send_file(mem, mimetype='text/vcard', as_attachment=True,
                      download_name='rolodex_contacts.vcf')
 
-# ── Fireworks AI Integration ────────────────────────────────────────────
+# ── AI Integration ────────────────────────────────────────────
 
 @app.route('/api/v1/ai/enrich', methods=['POST'])
 @login_required

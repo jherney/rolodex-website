@@ -61,9 +61,8 @@ services:
       ROLODEX_DB_NAME: "${ROLODEX_DB_NAME:-rolodex}"
       ROLODEX_DB_USER: "${ROLODEX_DB_USER:-rolodex}"
       ROLODEX_DB_PASSWORD: "${ROLODEX_DB_PASSWORD:-rolodex123}"
-      # Fireworks AI (optional — set via .env or env file)
-      FIREWORKS_API_KEY: "${FIREWORKS_API_KEY:-}"
-      FIREWORKS_API_URL: "${FIREWORKS_API_URL:-https://api.fireworks.ai/inference/v1}"
+      # OpenAI (optional — set via .env or env file)
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       # Vault secrets (optional)
       VAULT_ADDR: "${VAULT_ADDR:-}"
       VAULT_TOKEN: "${VAULT_TOKEN:-}"
