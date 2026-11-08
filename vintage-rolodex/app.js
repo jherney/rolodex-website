@@ -97,19 +97,22 @@
       if (this.mode === 'signedout') return;
       if (this.mode === 'local') return saveLocal();
       for (const c of list) {
-        if (this.mode === 'server' && isNew) {
-          await api('POST', API, { id: c.id, ...toServer(c) });
-        } else if (this.mode === 'server') {
-          try {
-            await api('PUT', `${API}/${encodeURIComponent(c.id)}`, toServer(c));
-          } catch (err) {
-            if (err.status !== 404) throw err;
-            await api('POST', API, { id: c.id, ...toServer(c) });
-          }
-        } else {
+        if (this.mode !== 'server') {
           const { id, ...body } = c;
           await this.col.doc(id).set(body);
+          continue;
         }
+        const body = toServer(c);
+        if (!isNew) {
+          // Existing card: update it. A 404 means the server doesn't have it yet, so create it below.
+          try {
+            await api('PUT', `${API}/${encodeURIComponent(c.id)}`, body);
+            continue;
+          } catch (err) {
+            if (err.status !== 404) throw err;
+          }
+        }
+        await api('POST', API, { id: c.id, ...body });
       }
     },
     async remove(id) {
