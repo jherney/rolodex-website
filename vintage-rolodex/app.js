@@ -758,7 +758,7 @@
     contacts = contacts.concat(examples);
     target = 0;
     rebuild();
-    persist(store.put(examples));
+    persist(store.put(examples, true));
   });
   $('#btn-first').addEventListener('click', () => openEditor(null));
 
