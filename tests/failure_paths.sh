@@ -126,13 +126,16 @@ env_docs_catch_a_missing_row() {
 }
 
 secure_cookie_in_production() {
-  local prod dev
+  local prod mixed dev
   prod="$(compose run --rm --no-deps -e ROLODEX_ENV=production -e ROLODEX_SECRET_KEY=test-key \
+    app python3 -c 'import app; print(app.app.config["SESSION_COOKIE_SECURE"])' 2>&1 | tail -n 1)"
+  # "Production" must not silently downgrade a real deployment
+  mixed="$(compose run --rm --no-deps -e ROLODEX_ENV=Production -e ROLODEX_SECRET_KEY=test-key \
     app python3 -c 'import app; print(app.app.config["SESSION_COOKIE_SECURE"])' 2>&1 | tail -n 1)"
   # Plain local runs stay on HTTP, so the cookie must not be Secure there
   dev="$(compose run --rm --no-deps \
     app python3 -c 'import app; print(app.app.config["SESSION_COOKIE_SECURE"])' 2>&1 | tail -n 1)"
-  [ "$prod" = "True" ] && [ "$dev" = "False" ]
+  [ "$prod" = "True" ] && [ "$mixed" = "True" ] && [ "$dev" = "False" ]
 }
 
 check 'session survives an app restart (key stored in Postgres)' session_survives_restart
