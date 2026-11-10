@@ -343,6 +343,44 @@ def main():
         raise AssertionError('15 sign-ups from one address and never a 429')
     test('sign-ups are throttled per client IP', signups_are_throttled_per_ip)
 
+    # ── 9. Security headers ───────────────────────────────────────────
+    print('[Security headers]')
+
+    def headers_of(path):
+        with urllib.request.urlopen(BASE + path, timeout=10) as resp:
+            return resp.headers
+
+    def security_headers_present():
+        headers = headers_of('/')
+        missing = [n for n in ('Content-Security-Policy', 'X-Content-Type-Options',
+                               'X-Frame-Options', 'Referrer-Policy', 'Permissions-Policy')
+                   if not headers.get(n)]
+        assert not missing, f'missing {missing}'
+    test('GET / sends the security headers', security_headers_present)
+
+    def csp_is_strict():
+        csp = headers_of('/').get('Content-Security-Policy', '')
+        assert_in("default-src 'self'", csp)
+        assert_in("script-src 'self'", csp)
+        assert_in("frame-ancestors 'none'", csp)
+        assert 'unsafe-inline' not in csp, csp
+    test('CSP is strict: no inline script, no framing', csp_is_strict)
+
+    def api_responses_are_nosniff():
+        assert_equal(headers_of('/health').get('X-Content-Type-Options'), 'nosniff')
+        assert_equal(headers_of('/api/v1/auth/me').get('X-Frame-Options'), 'DENY')
+    test('API responses carry the same headers', api_responses_are_nosniff)
+
+    def hsts_only_over_tls():
+        # The stack is plain HTTP, so HSTS must be absent; over HTTPS it must be present.
+        # BASE_URL is configurable, so the assertion has to follow the scheme in use.
+        hsts = headers_of('/').get('Strict-Transport-Security')
+        if BASE.startswith('https://'):
+            assert hsts and 'max-age' in hsts, f'expected HSTS over TLS, got {hsts!r}'
+        else:
+            assert hsts is None, f'HSTS over plain HTTP would be a lie: {hsts!r}'
+    test('HSTS appears only over TLS', hsts_only_over_tls)
+
     # ── Summary ────────────────────────────────────────────────────────
     total = PASS + FAIL
     print(f'\n{"=" * 44}')
