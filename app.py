@@ -33,7 +33,9 @@ DEBUG = os.environ.get('ROLODEX_DEBUG', '0').lower() in ('1', 'true', 'yes')
 # shares it. Anyone who can read the database can then forge sessions.
 # This check must stay above init_db(): a misconfigured production deploy fails before any DB access.
 SECRET_KEY = os.environ.get('ROLODEX_SECRET_KEY', '')
-if not SECRET_KEY and (os.environ.get('VERCEL') or os.environ.get('ROLODEX_ENV') == 'production'):
+# Normalised once: "Production" or "production " must not quietly downgrade a real deployment
+IS_PRODUCTION = os.environ.get('ROLODEX_ENV', '').strip().lower() == 'production'
+if not SECRET_KEY and (os.environ.get('VERCEL') or IS_PRODUCTION):
     raise RuntimeError('ROLODEX_SECRET_KEY must be set in production')
 # Empty = same-origin only (both bundled frontends are served by this app)
 CORS_ORIGIN = os.environ.get('ROLODEX_CORS_ORIGIN', '')
@@ -62,7 +64,10 @@ def _parse_trusted_proxies(raw):
 _TRUSTED_PROXY_NETWORKS = _parse_trusted_proxies(TRUSTED_PROXIES)
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['SESSION_COOKIE_SECURE'] = bool(os.environ.get('VERCEL') or os.environ.get('ROLODEX_SECURE_COOKIES'))
+# Secure by default in production, not only on Vercel: a self-hosted HTTPS deployment that
+# forgets ROLODEX_SECURE_COOKIES would otherwise send the session cookie over cleartext.
+app.config['SESSION_COOKIE_SECURE'] = bool(
+    os.environ.get('VERCEL') or IS_PRODUCTION or os.environ.get('ROLODEX_SECURE_COOKIES'))
 app.config['PERMANENT_SESSION_LIFETIME'] = 30 * 24 * 3600
 
 # PostgreSQL configuration
