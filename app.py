@@ -86,9 +86,38 @@ def _set_cors_headers(response):
         response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
     return response
 
+# ── Security headers ───────────────────────────────────────────────────
+# The vintage UI loads one stylesheet, one script and same-origin fonts, and contains no
+# inline script or style, so a strict policy needs no 'unsafe-inline'. The favicon is a
+# data: URI, hence img-src data:.
+CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; "
+    "img-src 'self' data:; connect-src 'self'; form-action 'self'; "
+    "base-uri 'none'; object-src 'none'; frame-ancestors 'none'"
+)
+SECURITY_HEADERS = {
+    'Content-Security-Policy': CONTENT_SECURITY_POLICY,
+    'X-Content-Type-Options': 'nosniff',
+    # frame-ancestors covers modern browsers; X-Frame-Options covers the rest
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'same-origin',
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
+    'Cross-Origin-Opener-Policy': 'same-origin',
+}
+_HSTS = 'max-age=31536000; includeSubDomains'
+
+def _set_security_headers(response):
+    for name, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(name, value)
+    # Only over TLS: a browser ignores HSTS on plain HTTP, and Vercel terminates TLS for us.
+    if request.is_secure or os.environ.get('VERCEL'):
+        response.headers.setdefault('Strict-Transport-Security', _HSTS)
+    return response
+
 @app.after_request
-def add_cors_headers(response):
-    return _set_cors_headers(response)
+def add_response_headers(response):
+    _set_cors_headers(response)
+    return _set_security_headers(response)
 
 @app.before_request
 def handle_options():
