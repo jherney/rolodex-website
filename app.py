@@ -49,14 +49,15 @@ def _parse_trusted_proxies(raw):
     if raw == '*':
         return None
     networks = []
-    for part in raw.split(','):
+    # The position, not the value: a startup log is not the place to echo configuration
+    for position, part in enumerate(raw.split(','), start=1):
         part = part.strip()
         if not part:
             continue
         try:
             networks.append(ipaddress.ip_network(part, strict=False))
         except ValueError:
-            app.logger.warning('ignoring invalid ROLODEX_TRUSTED_PROXIES entry: not an IP or CIDR')
+            app.logger.warning('ignoring ROLODEX_TRUSTED_PROXIES entry %d: not an IP or CIDR', position)
     return networks
 
 _TRUSTED_PROXY_NETWORKS = _parse_trusted_proxies(TRUSTED_PROXIES)
@@ -473,7 +474,8 @@ def _client_ip():
             try:
                 return str(ipaddress.ip_address(candidate))
             except ValueError:
-                app.logger.warning('ignoring malformed X-Forwarded-For value %r', candidate)
+                # Not echoed: the value is attacker-controlled and would end up in the log
+                app.logger.warning('ignoring a malformed X-Forwarded-For header')
     return request.remote_addr or 'unknown'
 
 def _login_keys(email):
