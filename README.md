@@ -58,7 +58,7 @@ gunicorn -c gunicorn_config.py wsgi_entry:app
 
 **Vercel**: the project is linked (`.vercel/`). Set `ROLODEX_SECRET_KEY` and connect a Postgres integration (Neon sets `DATABASE_URL`, Supabase sets `POSTGRES_URL`). The app refuses to start on Vercel without `ROLODEX_SECRET_KEY`. `vercel.json` schedules a daily cron on `/ready` (a `SELECT 1`) so Supabase's free tier doesn't pause the project for inactivity.
 
-The app binds to loopback by default. To reach it from other machines, put a reverse proxy with HTTPS in front and set `ROLODEX_SECURE_COOKIES=1`.
+The app binds to loopback by default. To reach it from other machines, put a reverse proxy with HTTPS in front and set `ROLODEX_ENV=production` (which also makes `ROLODEX_SECRET_KEY` mandatory) — that marks the session cookie Secure. `ROLODEX_SECURE_COOKIES=1` does the same on its own.
 
 If that proxy passes the client address in `X-Forwarded-For`, set `ROLODEX_TRUSTED_PROXIES` to its address (for example `10.0.0.5` or `172.16.0.0/12`), or `*` for any peer. Without it the header is ignored and every request is throttled as the proxy's own address, which puts all your users in one bucket — 20 failed sign-ins per 15 minutes shared by everyone, and 10 sign-ups per 15 minutes for the whole deployment, so one attacker can spend the account-creation budget. The header is read right to left, so a proxy that appends to it (nginx's `$proxy_add_x_forwarded_for`) cannot be fooled by a value the client supplied. Never trust the header on a deployment that is reachable directly: throttling counts per IP, and a client that can set it can mint a new bucket per request.
 
@@ -74,8 +74,8 @@ Sign-in cookies are signed with `ROLODEX_SECRET_KEY`. If you don't set it (local
 | `ROLODEX_HOST` | `127.0.0.1` | Bind address (`0.0.0.0` inside the container) |
 | `ROLODEX_DEBUG` | `0` | Flask debug mode for `python3 app.py` |
 | `ROLODEX_SECRET_KEY` | _(generated, stored in the DB)_ | Signs session cookies; required on Vercel and with `ROLODEX_ENV=production` |
-| `ROLODEX_ENV` | _(empty)_ | `production` makes `ROLODEX_SECRET_KEY` mandatory |
-| `ROLODEX_SECURE_COOKIES` | _(empty)_ | Any value marks the session cookie Secure (automatic on Vercel) |
+| `ROLODEX_ENV` | _(empty)_ | `production` makes `ROLODEX_SECRET_KEY` mandatory and marks the session cookie Secure |
+| `ROLODEX_SECURE_COOKIES` | _(empty)_ | Any value marks the session cookie Secure (automatic on Vercel and with `ROLODEX_ENV=production`) |
 | `ROLODEX_CORS_ORIGIN` | _(empty)_ | Allowed CORS origin; empty means same-origin only |
 | `ROLODEX_TRUSTED_PROXIES` | _(empty)_ | Peers whose `X-Forwarded-For` is believed, as IPs/CIDRs or `*`; empty trusts none (always trusted on Vercel) |
 | `DATABASE_URL` | _(empty)_ | Postgres connection URL; takes precedence over `ROLODEX_DB_*` |

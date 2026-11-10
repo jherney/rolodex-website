@@ -62,7 +62,12 @@ def _parse_trusted_proxies(raw):
 _TRUSTED_PROXY_NETWORKS = _parse_trusted_proxies(TRUSTED_PROXIES)
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['SESSION_COOKIE_SECURE'] = bool(os.environ.get('VERCEL') or os.environ.get('ROLODEX_SECURE_COOKIES'))
+# Secure by default in production, not only on Vercel: a self-hosted HTTPS deployment that
+# forgets ROLODEX_SECURE_COOKIES would otherwise send the session cookie over cleartext.
+app.config['SESSION_COOKIE_SECURE'] = bool(
+    os.environ.get('VERCEL')
+    or os.environ.get('ROLODEX_ENV') == 'production'
+    or os.environ.get('ROLODEX_SECURE_COOKIES'))
 app.config['PERMANENT_SESSION_LIFETIME'] = 30 * 24 * 3600
 
 # PostgreSQL configuration

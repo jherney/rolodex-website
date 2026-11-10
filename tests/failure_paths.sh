@@ -125,8 +125,19 @@ env_docs_catch_a_missing_row() {
   [ "$rc" = 1 ] && grep -q ROLODEX_VINTAGE_DIR "$TMP/err"
 }
 
+secure_cookie_in_production() {
+  local prod dev
+  prod="$(compose run --rm --no-deps -e ROLODEX_ENV=production -e ROLODEX_SECRET_KEY=test-key \
+    app python3 -c 'import app; print(app.app.config["SESSION_COOKIE_SECURE"])' 2>&1 | tail -n 1)"
+  # Plain local runs stay on HTTP, so the cookie must not be Secure there
+  dev="$(compose run --rm --no-deps \
+    app python3 -c 'import app; print(app.app.config["SESSION_COOKIE_SECURE"])' 2>&1 | tail -n 1)"
+  [ "$prod" = "True" ] && [ "$dev" = "False" ]
+}
+
 check 'session survives an app restart (key stored in Postgres)' session_survives_restart
 check 'X-Forwarded-For: trusted proxies only, rightmost hop, IPv4-mapped peers' forwarded_for_only_from_a_trusted_proxy
+check 'ROLODEX_ENV=production marks the session cookie Secure without ROLODEX_SECURE_COOKIES' secure_cookie_in_production
 check 'ROLODEX_SECRET_KEY set: no key written to the database' env_key_writes_no_row
 check 'startup without a database names it in one line' startup_names_the_database
 check 'database down: /api returns JSON 500 with an id, /ready 503 without hostnames' db_down_gives_json_errors
