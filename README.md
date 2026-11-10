@@ -60,7 +60,7 @@ gunicorn -c gunicorn_config.py wsgi_entry:app
 
 The app binds to loopback by default. To reach it from other machines, put a reverse proxy with HTTPS in front and set `ROLODEX_SECURE_COOKIES=1`.
 
-If that proxy passes the client address in `X-Forwarded-For`, set `ROLODEX_TRUSTED_PROXIES` to its address (for example `10.0.0.5` or `172.16.0.0/12`), or `*` for any peer. Without it the header is ignored and every request is throttled as the proxy's own address, which puts all your users in one 20-failures-per-15-minutes bucket. Never trust the header on a deployment that is reachable directly: sign-in throttling counts per IP, and a client that can set it can mint a new bucket per request.
+If that proxy passes the client address in `X-Forwarded-For`, set `ROLODEX_TRUSTED_PROXIES` to its address (for example `10.0.0.5` or `172.16.0.0/12`), or `*` for any peer. Without it the header is ignored and every request is throttled as the proxy's own address, which puts all your users in one bucket — 20 failed sign-ins per 15 minutes shared by everyone, and 10 sign-ups per 15 minutes for the whole deployment, so one attacker can spend the account-creation budget. The header is read right to left, so a proxy that appends to it (nginx's `$proxy_add_x_forwarded_for`) cannot be fooled by a value the client supplied. Never trust the header on a deployment that is reachable directly: throttling counts per IP, and a client that can set it can mint a new bucket per request.
 
 ### Session key
 

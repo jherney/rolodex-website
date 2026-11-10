@@ -95,16 +95,27 @@ claim_orphans_round_trip() {
 }
 
 forwarded_for_only_from_a_trusted_proxy() {
-  local probe untrusted exact cidr wildcard
-  probe='import app; c=app.app.test_request_context("/", headers={"X-Forwarded-For":"203.0.113.9"}, environ_base={"REMOTE_ADDR":"10.1.2.3"}); c.push(); print(app._client_ip())'
-  client_ip() { compose run --rm --no-deps "$@" app python3 -c "$probe" 2>&1 | tail -n 1; }
-  untrusted="$(client_ip)"
-  exact="$(client_ip -e ROLODEX_TRUSTED_PROXIES=10.1.2.3)"
-  cidr="$(client_ip -e ROLODEX_TRUSTED_PROXIES=10.0.0.0/8)"
-  wildcard="$(client_ip -e 'ROLODEX_TRUSTED_PROXIES=*')"
+  local untrusted exact cidr wildcard chain mapped port
+  # client_ip <remote_addr> <x-forwarded-for> [compose -e ...]
+  client_ip() {
+    local remote="$1" xff="$2"; shift 2
+    compose run --rm --no-deps "$@" app python3 -c \
+      "import app; c=app.app.test_request_context('/', headers={'X-Forwarded-For': '$xff'}, environ_base={'REMOTE_ADDR': '$remote'}); c.push(); print(app._client_ip())" \
+      2>&1 | tail -n 1
+  }
+  untrusted="$(client_ip 10.1.2.3 203.0.113.9)"
+  exact="$(client_ip 10.1.2.3 203.0.113.9 -e ROLODEX_TRUSTED_PROXIES=10.1.2.3)"
+  cidr="$(client_ip 10.1.2.3 203.0.113.9 -e ROLODEX_TRUSTED_PROXIES=10.0.0.0/8)"
+  wildcard="$(client_ip 10.1.2.3 203.0.113.9 -e 'ROLODEX_TRUSTED_PROXIES=*')"
+  # A proxy that appends leaves a client-supplied value on the left; the rightmost hop is real
+  chain="$(client_ip 10.1.2.3 '198.51.100.7, 203.0.113.9' -e ROLODEX_TRUSTED_PROXIES=10.1.2.3)"
+  # Dual-stack sockets report IPv4 peers as ::ffff:a.b.c.d, which must match an IPv4 network
+  mapped="$(client_ip ::ffff:10.1.2.3 203.0.113.9 -e ROLODEX_TRUSTED_PROXIES=10.0.0.0/8)"
+  port="$(client_ip 10.1.2.3 '203.0.113.9:443' -e ROLODEX_TRUSTED_PROXIES=10.1.2.3)"
   # Untrusted peers are throttled on their own address; a configured proxy gets the client's
   [ "$untrusted" = "10.1.2.3" ] && [ "$exact" = "203.0.113.9" ] &&
-    [ "$cidr" = "203.0.113.9" ] && [ "$wildcard" = "203.0.113.9" ]
+    [ "$cidr" = "203.0.113.9" ] && [ "$wildcard" = "203.0.113.9" ] &&
+    [ "$chain" = "203.0.113.9" ] && [ "$mapped" = "203.0.113.9" ] && [ "$port" = "203.0.113.9" ]
 }
 
 env_docs_catch_a_missing_row() {
@@ -115,7 +126,7 @@ env_docs_catch_a_missing_row() {
 }
 
 check 'session survives an app restart (key stored in Postgres)' session_survives_restart
-check 'X-Forwarded-For is believed only from a configured proxy (exact, CIDR, *)' forwarded_for_only_from_a_trusted_proxy
+check 'X-Forwarded-For: trusted proxies only, rightmost hop, IPv4-mapped peers' forwarded_for_only_from_a_trusted_proxy
 check 'ROLODEX_SECRET_KEY set: no key written to the database' env_key_writes_no_row
 check 'startup without a database names it in one line' startup_names_the_database
 check 'database down: /api returns JSON 500 with an id, /ready 503 without hostnames' db_down_gives_json_errors
