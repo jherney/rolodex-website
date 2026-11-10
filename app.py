@@ -606,10 +606,21 @@ def _record_signup():
         conn.close()
 
 def _clear_login_failures(keys):
+    """A successful sign-in clears both keys it was counted against, the email and the IP.
+
+    Clearing only the email left the IP counter to keep climbing, so a correct password
+    from a shared address could still be locked out by other people's failures.
+
+    The trade-off is deliberate: anyone holding one valid account can reset the per-IP
+    counter by signing into it between attempts. The per-email limit (5) still caps guessing
+    a single account, and counting per (email, IP) pair instead would be the next step if
+    address-wide spray becomes a real problem. Note also that a locked IP returns 429 before
+    the password is checked, so this only helps an address that is not already locked.
+    """
     conn = get_db_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM login_failures WHERE key = %s", (keys[0],))
+            cur.execute("DELETE FROM login_failures WHERE key = ANY(%s)", (keys,))
         conn.commit()
     finally:
         conn.close()

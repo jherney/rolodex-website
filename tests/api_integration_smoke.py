@@ -60,6 +60,19 @@ def request(method, path, body=None, expect=200, opener=None):
     return text
 
 
+def status_of(method, path, body=None, opener=None):
+    """Like request(), but returns the status code instead of asserting one."""
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(BASE + path, data=data,
+                                 headers={'Content-Type': 'application/json'} if body is not None else {},
+                                 method=method)
+    try:
+        with (opener or OPENER).open(req, timeout=10) as resp:
+            return resp.status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+
 def sign_up(email, password='correct-horse-battery'):
     """Create an account and return an opener that holds its session cookie."""
     opener = new_opener()
@@ -380,6 +393,31 @@ def main():
         else:
             assert hsts is None, f'HSTS over plain HTTP would be a lie: {hsts!r}'
     test('HSTS appears only over TLS', hsts_only_over_tls)
+
+    # ── 10. Login throttling ──────────────────────────────────────────
+    print('[Login throttling]')
+
+    def success_clears_the_ip_counter():
+        # Normalise first: a successful sign-in clears the IP counter, which is exactly what
+        # keeps this re-runnable against a stack that already ran the suite within the window.
+        assert_equal(status_of('POST', '/api/v1/auth/login',
+                               {'email': f'smoke-{run_id}@example.test',
+                                'password': 'correct-horse-battery'}), 200)
+        # Twelve failures across twelve emails touch only the IP key (limit 20)
+        for i in range(12):
+            assert_equal(status_of('POST', '/api/v1/auth/login',
+                                   {'email': f'ip-reset-a-{run_id}-{i}@example.test',
+                                    'password': 'wrong-password-here'}), 401)
+        # A correct password from the same address must clear the IP counter too
+        assert_equal(status_of('POST', '/api/v1/auth/login',
+                               {'email': f'smoke-{run_id}@example.test',
+                                'password': 'correct-horse-battery'}), 200)
+        # 12 more: an uncleared counter would be at 24 here and lock the 5th attempt
+        for i in range(12):
+            assert_equal(status_of('POST', '/api/v1/auth/login',
+                                   {'email': f'ip-reset-b-{run_id}-{i}@example.test',
+                                    'password': 'wrong-password-here'}), 401)
+    test('a successful sign-in clears the per-IP failure counter', success_clears_the_ip_counter)
 
     # ── Summary ────────────────────────────────────────────────────────
     total = PASS + FAIL
