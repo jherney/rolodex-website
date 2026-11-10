@@ -110,7 +110,7 @@ curl -s -b jar -H 'Content-Type: application/json' -d '{"name":"Ada Lovelace","e
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/api/v1/auth/signup` | Create an account and sign in (`email`, `password` ≥ 10 chars) |
+| POST | `/api/v1/auth/signup` | Create an account and sign in (`email`, `password` ≥ 10 chars); 10 accounts per IP per 15 minutes |
 | POST | `/api/v1/auth/login` | Sign in; 5 failures lock an email and 20 lock an IP for 15 minutes |
 | POST | `/api/v1/auth/logout` | Sign out |
 | GET | `/api/v1/auth/me` | `{"email": ...}`, or `null` when signed out |
