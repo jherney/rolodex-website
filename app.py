@@ -5,6 +5,7 @@ import json
 import os
 import secrets
 import io
+import ipaddress
 import csv
 import re
 import urllib.parse
@@ -36,6 +37,29 @@ if not SECRET_KEY and (os.environ.get('VERCEL') or os.environ.get('ROLODEX_ENV')
     raise RuntimeError('ROLODEX_SECRET_KEY must be set in production')
 # Empty = same-origin only (both bundled frontends are served by this app)
 CORS_ORIGIN = os.environ.get('ROLODEX_CORS_ORIGIN', '')
+# Which peers may set X-Forwarded-For. Empty means trust none: on a direct deployment the
+# header is client-controlled, so believing it lets anyone rotate the per-IP login throttle
+# by sending a different value each time. Vercel sets it at the edge, so it is trusted
+# there. Comma-separated IPs or CIDRs, or "*" to trust every peer (only with a proxy in front).
+TRUSTED_PROXIES = os.environ.get('ROLODEX_TRUSTED_PROXIES', '')
+
+def _parse_trusted_proxies(raw):
+    """None = trust every peer; otherwise the networks to trust (empty list = trust none)."""
+    raw = raw.strip()
+    if raw == '*':
+        return None
+    networks = []
+    for part in raw.split(','):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(part, strict=False))
+        except ValueError:
+            app.logger.warning('ignoring ROLODEX_TRUSTED_PROXIES entry %r: not an IP or CIDR', part)
+    return networks
+
+_TRUSTED_PROXY_NETWORKS = _parse_trusted_proxies(TRUSTED_PROXIES)
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_SECURE'] = bool(os.environ.get('VERCEL') or os.environ.get('ROLODEX_SECURE_COOKIES'))
@@ -422,10 +446,35 @@ def api_signup():
 LOGIN_WINDOW = '15 minutes'
 LOGIN_LIMITS = {'email': 5, 'ip': 20}
 
+def _peer_may_set_forwarded_for():
+    """True when the immediate peer is a proxy we are configured to believe."""
+    if os.environ.get('VERCEL'):
+        return True
+    if _TRUSTED_PROXY_NETWORKS is None:
+        return True
+    if not _TRUSTED_PROXY_NETWORKS:
+        return False
+    try:
+        peer = ipaddress.ip_address(request.remote_addr or '')
+    except ValueError:
+        return False
+    return any(peer in network for network in _TRUSTED_PROXY_NETWORKS)
+
 def _client_ip():
-    # Vercel and most proxies put the client address first in X-Forwarded-For
-    forwarded = request.headers.get('X-Forwarded-For', '')
-    return forwarded.split(',')[0].strip() or (request.remote_addr or 'unknown')
+    """The address the throttle counts against.
+
+    X-Forwarded-For is honoured only when a trusted proxy set it; otherwise any client
+    could mint a fresh counter per request and skip the per-IP limit.
+    """
+    if _peer_may_set_forwarded_for():
+        forwarded = request.headers.get('X-Forwarded-For', '')
+        candidate = forwarded.split(',')[0].strip()
+        if candidate:
+            try:
+                return str(ipaddress.ip_address(candidate))
+            except ValueError:
+                app.logger.warning('ignoring malformed X-Forwarded-For value %r', candidate)
+    return request.remote_addr or 'unknown'
 
 def _login_keys(email):
     return [f'email:{email}', f'ip:{_client_ip()}']

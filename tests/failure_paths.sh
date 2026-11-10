@@ -90,6 +90,19 @@ claim_orphans_round_trip() {
   [ "$rc" = 2 ]
 }
 
+forwarded_for_only_from_a_trusted_proxy() {
+  local probe untrusted exact cidr wildcard
+  probe='import app; c=app.app.test_request_context("/", headers={"X-Forwarded-For":"203.0.113.9"}, environ_base={"REMOTE_ADDR":"10.1.2.3"}); c.push(); print(app._client_ip())'
+  client_ip() { compose run --rm --no-deps "$@" app python3 -c "$probe" 2>&1 | tail -n 1; }
+  untrusted="$(client_ip)"
+  exact="$(client_ip -e ROLODEX_TRUSTED_PROXIES=10.1.2.3)"
+  cidr="$(client_ip -e ROLODEX_TRUSTED_PROXIES=10.0.0.0/8)"
+  wildcard="$(client_ip -e 'ROLODEX_TRUSTED_PROXIES=*')"
+  # Untrusted peers are throttled on their own address; a configured proxy gets the client's
+  [ "$untrusted" = "10.1.2.3" ] && [ "$exact" = "203.0.113.9" ] &&
+    [ "$cidr" = "203.0.113.9" ] && [ "$wildcard" = "203.0.113.9" ]
+}
+
 env_docs_catch_a_missing_row() {
   local rc=0
   grep -v '`ROLODEX_VINTAGE_DIR`' "$ROOT_DIR/README.md" > "$TMP/README.md"
@@ -98,6 +111,7 @@ env_docs_catch_a_missing_row() {
 }
 
 check 'session survives an app restart (key stored in Postgres)' session_survives_restart
+check 'X-Forwarded-For is believed only from a configured proxy (exact, CIDR, *)' forwarded_for_only_from_a_trusted_proxy
 check 'ROLODEX_SECRET_KEY set: no key written to the database' env_key_writes_no_row
 check 'startup without a database names it in one line' startup_names_the_database
 check 'database down: /api returns JSON 500 with an id, /ready 503 without hostnames' db_down_gives_json_errors

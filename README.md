@@ -60,6 +60,8 @@ gunicorn -c gunicorn_config.py wsgi_entry:app
 
 The app binds to loopback by default. To reach it from other machines, put a reverse proxy with HTTPS in front and set `ROLODEX_SECURE_COOKIES=1`.
 
+If that proxy passes the client address in `X-Forwarded-For`, set `ROLODEX_TRUSTED_PROXIES` to its address (for example `10.0.0.5` or `172.16.0.0/12`), or `*` for any peer. Without it the header is ignored and every request is throttled as the proxy's own address, which puts all your users in one 20-failures-per-15-minutes bucket. Never trust the header on a deployment that is reachable directly: sign-in throttling counts per IP, and a client that can set it can mint a new bucket per request.
+
 ### Session key
 
 Sign-in cookies are signed with `ROLODEX_SECRET_KEY`. If you don't set it (local and Compose runs), the app generates one key on first start and stores it in the database's `app_settings` table, so every worker and every restart shares it. Anyone who can read that database can forge sessions; set the variable yourself to keep the key out of the database. `VERCEL` or `ROLODEX_ENV=production` makes the variable mandatory.
@@ -75,6 +77,7 @@ Sign-in cookies are signed with `ROLODEX_SECRET_KEY`. If you don't set it (local
 | `ROLODEX_ENV` | _(empty)_ | `production` makes `ROLODEX_SECRET_KEY` mandatory |
 | `ROLODEX_SECURE_COOKIES` | _(empty)_ | Any value marks the session cookie Secure (automatic on Vercel) |
 | `ROLODEX_CORS_ORIGIN` | _(empty)_ | Allowed CORS origin; empty means same-origin only |
+| `ROLODEX_TRUSTED_PROXIES` | _(empty)_ | Peers whose `X-Forwarded-For` is believed, as IPs/CIDRs or `*`; empty trusts none (always trusted on Vercel) |
 | `DATABASE_URL` | _(empty)_ | Postgres connection URL; takes precedence over `ROLODEX_DB_*` |
 | `POSTGRES_URL` | _(empty)_ | Used when `DATABASE_URL` is unset (Supabase on Vercel) |
 | `ROLODEX_DB_HOST` | `localhost` | Postgres host (`db` in Compose) |
