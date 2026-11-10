@@ -32,6 +32,10 @@ check() {  # name command...
   if "$@"; then echo "  ✓ $name"; else echo "  ✗ $name"; FAILED=1; fi
 }
 
+# The smoke suite deliberately exhausts the sign-up throttle for this address, so clear the
+# counter before creating the account the rest of these checks need.
+psql_db "DELETE FROM login_failures WHERE key LIKE 'signup-ip:%'" >/dev/null
+
 curl -sf -o /dev/null -c "$JAR" -H 'Content-Type: application/json' \
   -d "{\"email\":\"$EMAIL\",\"password\":\"correct-horse-battery\"}" "$(base_url)/api/v1/auth/signup"
 

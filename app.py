@@ -396,6 +396,9 @@ def api_signup():
         return jsonify({'error': 'enter a valid email address'}), 400
     if len(password) < 10:
         return jsonify({'error': 'password must be at least 10 characters'}), 400
+    # Checked before any database work: an address that just created SIGNUP_LIMIT accounts waits
+    if _login_locked(_signup_keys()):
+        return jsonify({'error': 'too many accounts created from this address; try again in 15 minutes'}), 429
 
     uid = _new_id()
     conn = get_db_conn()
@@ -411,6 +414,7 @@ def api_signup():
     finally:
         conn.close()
 
+    _record_signup()
     session.clear()
     session.permanent = True
     session['uid'] = uid
@@ -421,6 +425,9 @@ def api_signup():
 # server instance sees the same lockouts.
 LOGIN_WINDOW = '15 minutes'
 LOGIN_LIMITS = {'email': 5, 'ip': 20}
+# Sign-up throttling, same window and table. Sign-up is open to anyone and every account is
+# a row in `users`, so without a limit a single script can fill the table from one address.
+SIGNUP_LIMIT = 10
 
 def _client_ip():
     # Vercel and most proxies put the client address first in X-Forwarded-For
@@ -439,30 +446,45 @@ def _login_locked(keys):
     finally:
         conn.close()
 
+def _bump_failure(cur, key, limit):
+    """Count one attempt against `key`, starting a new count once the window has passed."""
+    cur.execute(
+        f"""
+        INSERT INTO login_failures (key, failures, window_start, locked_until)
+        VALUES (%s, 1, now(), CASE WHEN 1 >= %s THEN now() + interval '{LOGIN_WINDOW}' END)
+        ON CONFLICT (key) DO UPDATE SET
+          failures = CASE WHEN login_failures.window_start < now() - interval '{LOGIN_WINDOW}'
+                          THEN 1 ELSE login_failures.failures + 1 END,
+          window_start = CASE WHEN login_failures.window_start < now() - interval '{LOGIN_WINDOW}'
+                              THEN now() ELSE login_failures.window_start END,
+          locked_until = CASE WHEN (CASE WHEN login_failures.window_start < now() - interval '{LOGIN_WINDOW}'
+                                         THEN 1 ELSE login_failures.failures + 1 END) >= %s
+                              THEN now() + interval '{LOGIN_WINDOW}'
+                              ELSE login_failures.locked_until END
+        """,
+        (key, limit, limit))
+
 def _record_login_failure(keys):
     conn = get_db_conn()
     try:
         with conn.cursor() as cur:
             for key, kind in zip(keys, ('email', 'ip')):
-                limit = LOGIN_LIMITS[kind]
-                # A failure after the window has passed starts a new count
-                cur.execute(
-                    f"""
-                    INSERT INTO login_failures (key, failures, window_start, locked_until)
-                    VALUES (%s, 1, now(), CASE WHEN 1 >= %s THEN now() + interval '{LOGIN_WINDOW}' END)
-                    ON CONFLICT (key) DO UPDATE SET
-                      failures = CASE WHEN login_failures.window_start < now() - interval '{LOGIN_WINDOW}'
-                                      THEN 1 ELSE login_failures.failures + 1 END,
-                      window_start = CASE WHEN login_failures.window_start < now() - interval '{LOGIN_WINDOW}'
-                                          THEN now() ELSE login_failures.window_start END,
-                      locked_until = CASE WHEN (CASE WHEN login_failures.window_start < now() - interval '{LOGIN_WINDOW}'
-                                                     THEN 1 ELSE login_failures.failures + 1 END) >= %s
-                                          THEN now() + interval '{LOGIN_WINDOW}'
-                                          ELSE login_failures.locked_until END
-                    """,
-                    (key, limit, limit))
+                _bump_failure(cur, key, LOGIN_LIMITS[kind])
             # Forget counters that are long finished, so the table stays small
             cur.execute(f"DELETE FROM login_failures WHERE window_start < now() - interval '1 day'")
+        conn.commit()
+    finally:
+        conn.close()
+
+def _signup_keys():
+    return [f'signup-ip:{_client_ip()}']
+
+def _record_signup():
+    """Count one created account against the client address."""
+    conn = get_db_conn()
+    try:
+        with conn.cursor() as cur:
+            _bump_failure(cur, _signup_keys()[0], SIGNUP_LIMIT)
         conn.commit()
     finally:
         conn.close()

@@ -318,6 +318,31 @@ def main():
         assert_in('CACHE_NAME', request('GET', '/sw.js', expect=200))
     ))
 
+    # ── 8. Sign-up throttling ─────────────────────────────────────────
+    print('[Sign-up throttling]')
+
+    def signup_status(email):
+        req = urllib.request.Request(
+            BASE + '/api/v1/auth/signup',
+            data=json.dumps({'email': email, 'password': 'correct-horse-battery'}).encode(),
+            headers={'Content-Type': 'application/json'}, method='POST')
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return resp.status
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    def signups_are_throttled_per_ip():
+        # Earlier tests already created a few accounts from this address, so the limit must
+        # arrive within this many tries rather than at an exact count.
+        for i in range(15):
+            code = signup_status(f'signup-throttle-{run_id}-{i}@example.test')
+            if code == 429:
+                return
+            assert_equal(code, 201)
+        raise AssertionError('15 sign-ups from one address and never a 429')
+    test('sign-ups are throttled per client IP', signups_are_throttled_per_ip)
+
     # ── Summary ────────────────────────────────────────────────────────
     total = PASS + FAIL
     print(f'\n{"=" * 44}')
