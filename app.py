@@ -56,7 +56,7 @@ def _parse_trusted_proxies(raw):
         try:
             networks.append(ipaddress.ip_network(part, strict=False))
         except ValueError:
-            app.logger.warning('ignoring ROLODEX_TRUSTED_PROXIES entry %r: not an IP or CIDR', part)
+            app.logger.warning('ignoring invalid ROLODEX_TRUSTED_PROXIES entry: not an IP or CIDR')
     return networks
 
 _TRUSTED_PROXY_NETWORKS = _parse_trusted_proxies(TRUSTED_PROXIES)
