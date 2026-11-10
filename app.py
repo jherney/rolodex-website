@@ -453,6 +453,26 @@ LOGIN_LIMITS = {'email': 5, 'ip': 20}
 # a row in `users`, so without a limit a single script can fill the table from one address.
 SIGNUP_LIMIT = 10
 
+def _normalized_ip(value):
+    """Parse one address, tolerating "[v6]", "host:port" and IPv4-mapped IPv6 forms."""
+    value = (value or '').strip()
+    if not value:
+        return None
+    if value.startswith('['):
+        end = value.find(']')
+        if end != -1:
+            value = value[1:end]
+    elif value.count(':') == 1 and '.' in value:
+        value = value.rsplit(':', 1)[0]  # 203.0.113.9:443
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return None
+    # ::ffff:10.0.0.1 and 10.0.0.1 must share a bucket, and match the same network
+    if address.version == 6 and address.ipv4_mapped:
+        return address.ipv4_mapped
+    return address
+
 def _peer_may_set_forwarded_for():
     """True when the immediate peer is a proxy we are configured to believe."""
     if os.environ.get('VERCEL'):
@@ -461,27 +481,40 @@ def _peer_may_set_forwarded_for():
         return True
     if not _TRUSTED_PROXY_NETWORKS:
         return False
-    try:
-        peer = ipaddress.ip_address(request.remote_addr or '')
-    except ValueError:
+    peer = _normalized_ip(request.remote_addr)
+    if peer is None:
         return False
     return any(peer in network for network in _TRUSTED_PROXY_NETWORKS)
 
 def _client_ip():
     """The address the throttle counts against.
 
-    X-Forwarded-For is honoured only when a trusted proxy set it; otherwise any client
-    could mint a fresh counter per request and skip the per-IP limit.
+    X-Forwarded-For is read only when the peer is a configured proxy, and then right to
+    left: the rightmost entry was appended by the peer we are talking to, while a proxy that
+    appends (`$proxy_add_x_forwarded_for`) leaves any client-supplied value to its left.
+    Reading the leftmost entry would let a client pick its own bucket through that proxy.
+    Trusted hops are skipped and the first untrusted one is the client.
     """
-    if _peer_may_set_forwarded_for():
-        forwarded = request.headers.get('X-Forwarded-For', '')
-        candidate = forwarded.split(',')[0].strip()
-        if candidate:
-            try:
-                return str(ipaddress.ip_address(candidate))
-            except ValueError:
-                app.logger.warning('ignoring malformed X-Forwarded-For value %r', candidate)
-    return request.remote_addr or 'unknown'
+    peer = _normalized_ip(request.remote_addr)
+    peer_text = str(peer) if peer is not None else (request.remote_addr or 'unknown')
+    if not _peer_may_set_forwarded_for():
+        return peer_text
+    hops = [h.strip() for h in request.headers.get('X-Forwarded-For', '').split(',') if h.strip()]
+    if not hops:
+        return peer_text
+    if _TRUSTED_PROXY_NETWORKS is None:
+        # Every peer is trusted, so no hop stands out as the client: the leftmost is it
+        leftmost = _normalized_ip(hops[0])
+        return str(leftmost) if leftmost is not None else peer_text
+    for hop_text in reversed(hops):
+        hop = _normalized_ip(hop_text)
+        if hop is None:
+            app.logger.warning('ignoring a malformed X-Forwarded-For hop')
+            return peer_text
+        if any(hop in network for network in _TRUSTED_PROXY_NETWORKS):
+            continue
+        return str(hop)
+    return peer_text
 
 def _login_keys(email):
     return [f'email:{email}', f'ip:{_client_ip()}']
