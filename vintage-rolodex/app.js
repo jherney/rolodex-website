@@ -833,7 +833,7 @@
 
   async function openDuplicates() {
     try {
-      renderDuplicates(await api('GET', '/api/v1/duplicates?threshold=0.7'));
+      renderDuplicates(await api('GET', '/api/v1/duplicates'));
       $('#duplicates-review').showModal();
     } catch {
       toast('Duplicate check failed.');
@@ -894,7 +894,7 @@
       });
       $('#merge-review').close();
       await refreshServerCards();
-      if ($('#duplicates-review').open) renderDuplicates(await api('GET', '/api/v1/duplicates?threshold=0.7'), true);
+      if ($('#duplicates-review').open) renderDuplicates(await api('GET', '/api/v1/duplicates'), true);
       toast(`Merged into ${primary.name || 'a card'}.`);
     } catch {
       toast('Merge failed.');

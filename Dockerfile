@@ -13,11 +13,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY app.py app.py
-COPY index.html index.html
-COPY app.js app.js
-COPY styles.css styles.css
-COPY manifest.json manifest.json
-COPY sw.js sw.js
 COPY wsgi_entry.py wsgi_entry.py
 COPY gunicorn_config.py gunicorn_config.py
 

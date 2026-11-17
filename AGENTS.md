@@ -21,7 +21,6 @@ Flask + PostgreSQL app with per-account sign-in. The vintage desk-rolodex UI (`v
 - `app.py`: every route, the schema (`init_db()`, run at import under `pg_advisory_xact_lock`) and the DB connection (`get_db_conn()`: `DATABASE_URL`, then `POSTGRES_URL`, then `ROLODEX_DB_*`).
 - `migrate_to_postgres.py`: `--owner EMAIL` imports a contacts.json; `--claim-orphans --owner EMAIL` adopts contacts with no `user_id`. It imports `get_db_conn` from `app.py`; don't copy connection or schema code into it.
 - `tests/api_integration_smoke.py`: stdlib HTTP smoke tests (`BASE_URL`, exit 2 when no server answers). `tests/failure_paths.sh`: failure-path checks run by `./runner.sh test`. `tests/check_env_docs.py`: fails when README misses an env var the code reads.
-- `index.html`, `app.js`, `styles.css`, `sw.js`, `manifest.json` at the repo root belong to the old classic UI. No route serves its page; don't build features there (see TODOS.md).
 
 ## Conventions and gotchas
 
@@ -32,3 +31,5 @@ Flask + PostgreSQL app with per-account sign-in. The vintage desk-rolodex UI (`v
 - **Users and contacts**: every contact has a `user_id`; every query filters on the signed-in user. Emails are stored lowercased.
 - **Compose**: the `db` service isn't published to the host; the app reaches it as `db:5432`. On Fedora, bind mounts need `:z`.
 - **Vintage UI**: it splits the API's single `name` into first/last (last word = surname) and uses the `company`/`title` columns.
+- **Single insert path**: `insert_contact()` in `app.py` is the only contacts INSERT; `save_contacts`, `/api/v1/import` and `migrate_to_postgres.py` all call it — extend it, don't copy it.
+- **Removed dead code**: the old classic UI (root `index.html`, `app.js`, `styles.css`, `sw.js`, `manifest.json`) and the unused Vault wiring (`secrets_loader.py`, the compose `vault` service) were deleted. Don't reintroduce routes or files for them; browsers that installed the old service worker drop it when `/sw.js` 404s.

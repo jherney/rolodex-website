@@ -1,25 +1,6 @@
 version: "3.9"
 
 services:
-  # ── HashiCorp Vault (optional secrets management) ──────────────────────
-  vault:
-    image: hashicorp/vault:1.14
-    profiles:
-      - with-vault
-    ports:
-      - "8200:8200"
-    cap_add:
-      - IPC_LOCK
-    environment:
-      VAULT_DEV_ROOT_TOKEN_ID: root
-      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
-    command: server -dev -dev-root-token-id=root -dev-listen-address=0.0.0.0:8200
-    healthcheck:
-      test: ["CMD", "vault", "status"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-
   # ── PostgreSQL (contacts store) ───────────────────────────────────────
   db:
     image: docker.io/library/postgres:16-alpine
@@ -61,10 +42,6 @@ services:
       ROLODEX_DB_NAME: "${ROLODEX_DB_NAME:-rolodex}"
       ROLODEX_DB_USER: "${ROLODEX_DB_USER:-rolodex}"
       ROLODEX_DB_PASSWORD: "${ROLODEX_DB_PASSWORD:-rolodex123}"
-      # Vault secrets (optional)
-      VAULT_ADDR: "${VAULT_ADDR:-}"
-      VAULT_TOKEN: "${VAULT_TOKEN:-}"
-      ROLODEX_VAULT_PATH: "${ROLODEX_VAULT_PATH:-secret/rolodex/config}"
     working_dir: /app
     command: ["gunicorn", "-c", "gunicorn_config.py", "wsgi_entry:app"]
     healthcheck:
@@ -77,9 +54,6 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      vault:
-        condition: service_healthy
-        required: false
     restart: unless-stopped
 
 volumes:

@@ -14,7 +14,7 @@ import json
 import os
 import sys
 
-from app import get_db_conn
+from app import get_db_conn, insert_contact
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -50,34 +50,7 @@ def import_json(cur, uid, email, path):
         if not cid:
             skipped += 1
             continue
-        cur.execute(
-            """
-            INSERT INTO contacts
-            (id, name, phone, email, address, tags, notes, avatar, birthday,
-             social, linked_contacts, starred, created_at, updated_at, company, title, user_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (id) DO NOTHING
-            """,
-            (
-                cid,
-                c.get('name', ''),
-                c.get('phone', ''),
-                c.get('email', ''),
-                c.get('address', ''),
-                json.dumps(c.get('tags', [])),
-                c.get('notes', ''),
-                c.get('avatar', ''),
-                c.get('birthday', ''),
-                json.dumps(c.get('social', {})),
-                json.dumps(c.get('linked_contacts', [])),
-                bool(c.get('starred', False)),
-                c.get('createdAt', '1970-01-01T00:00:00'),
-                c.get('updatedAt', '1970-01-01T00:00:00'),
-                c.get('company', ''),
-                c.get('title', ''),
-                uid,
-            ),
-        )
+        insert_contact(cur, c, uid, ignore_conflict=True)
         if cur.rowcount:
             inserted += 1
         else:

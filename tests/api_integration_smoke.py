@@ -153,14 +153,11 @@ def main():
     test('GET / returns HTML', lambda: (
         assert_in('<!doctype html>', request('GET', '/', expect=200).lower())
     ))
-    test('GET /styles.css returns CSS', lambda: (
-        assert_in(':root', request('GET', '/styles.css', expect=200))
+    test('GET /app.js returns 404 (classic UI removed)', lambda: (
+        request('GET', '/app.js', expect=404)
     ))
-    test('GET /app.js returns JS', lambda: (
-        assert_in('function', request('GET', '/app.js', expect=200))
-    ))
-    test('GET /manifest.json returns PWA manifest', lambda: (
-        assert_equal(request('GET', '/manifest.json')['short_name'], 'Rolodex')
+    test('GET /vintage/app.js returns JS', lambda: (
+        assert_in('function', request('GET', '/vintage/app.js', expect=200))
     ))
 
     # ── 3. Legacy API ──────────────────────────────────────────────────
@@ -191,6 +188,16 @@ def main():
         created_id = result['contact']['id']
         assert_isinstance(created_id, str)
     test('POST /api/v1/contacts creates contact', create_test_contact)
+
+    def reject_bad_tags_type():
+        request('POST', '/api/v1/contacts', {'name': 'Bad Tags', 'tags': 'work'}, expect=400)
+    test('POST /api/v1/contacts rejects tags that are not a list', reject_bad_tags_type)
+
+    def created_at_is_iso():
+        contacts = request('GET', '/api/v1/contacts')
+        stamp = contacts[0].get('createdAt', '')
+        assert 'T' in stamp, f'createdAt {stamp!r} is not ISO 8601'
+    test('GET /api/v1/contacts returns ISO 8601 timestamps', created_at_is_iso)
 
     def list_contacts():
         contacts = request('GET', '/api/v1/contacts')
@@ -325,11 +332,6 @@ def main():
         assert_equal(result['status'], 'ok')
     test('POST /api/v1/bulk delete works', bulk_delete)
 
-    # ── 7. PWA ────────────────────────────────────────────────────────
-    print('[PWA]')
-    test('GET /sw.js returns service worker', lambda: (
-        assert_in('CACHE_NAME', request('GET', '/sw.js', expect=200))
-    ))
 
     # ── 8. Sign-up throttling ─────────────────────────────────────────
     print('[Sign-up throttling]')

@@ -15,7 +15,6 @@ import psycopg2.extras
 from werkzeug.exceptions import InternalServerError
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONTACTS_PATH = os.path.join(BASE_DIR, 'contacts.json')
 # The vintage desk-rolodex frontend, served at /vintage/ against the same API
 VINTAGE_DIR = os.path.abspath(os.environ.get(
     'ROLODEX_VINTAGE_DIR', os.path.join(BASE_DIR, 'vintage-rolodex')))
@@ -273,6 +272,25 @@ def _text(data, key):
     value = data.get(key)
     return value.strip() if isinstance(value, str) else ''
 
+def _json_list(data, key):
+    """A JSONB list-of-strings field from request JSON, or None when the value has the wrong shape."""
+    value = data.get(key)
+    if value is None or value == []:
+        return []
+    if isinstance(value, list) and all(isinstance(v, str) for v in value):
+        # Keep original case (tags match case-insensitively), drop blanks and duplicates
+        return list(dict.fromkeys(v.strip() for v in value if v.strip()))
+    return None
+
+def _json_object(data, key):
+    """A JSONB object field from request JSON, or None when the value is not an object."""
+    value = data.get(key)
+    if value is None or value == {}:
+        return {}
+    if isinstance(value, dict) and all(isinstance(v, str) for v in value.values()):
+        return value
+    return None
+
 def current_user_id():
     return session.get('uid')
 
@@ -289,12 +307,16 @@ def login_required(view):
         return view(*args, **kwargs)
     return wrapper
 
+def _iso(value):
+    """Timestamps leave the API as ISO 8601 strings, not Flask's default HTTP-date form."""
+    return value.isoformat() if isinstance(value, datetime) else value
+
 def _row_to_dict(row):
     """Convert a RealDictRow to a plain dict with camelCase keys for createdAt/updatedAt."""
     d = dict(row)
     # Rename created_at / updated_at to createdAt / updatedAt for API compat
-    d['createdAt'] = d.pop('created_at', None)
-    d['updatedAt'] = d.pop('updated_at', None)
+    d['createdAt'] = _iso(d.pop('created_at', None))
+    d['updatedAt'] = _iso(d.pop('updated_at', None))
     # Ensure JSON fields are lists/dicts
     if isinstance(d.get('tags'), str):
         d['tags'] = json.loads(d['tags']) if d['tags'] else []
@@ -314,6 +336,48 @@ def load_contacts(uid):
     finally:
         conn.close()
 
+def _contact_row_values(c, uid):
+    """The values tuple for one contacts INSERT, with JSON fields encoded and timestamps defaulted."""
+    now = datetime.now().isoformat()
+    return (
+        c.get('id'),
+        c.get('name', ''),
+        c.get('phone', ''),
+        c.get('email', ''),
+        c.get('address', ''),
+        json.dumps(c.get('tags', [])),
+        c.get('notes', ''),
+        c.get('avatar', ''),
+        c.get('birthday', ''),
+        json.dumps(c.get('social', {})),
+        json.dumps(c.get('linked_contacts', [])),
+        bool(c.get('starred', False)),
+        c.get('createdAt') or now,
+        c.get('updatedAt') or now,
+        c.get('company', ''),
+        c.get('title', ''),
+        uid,
+    )
+
+def insert_contact(cur, c, uid, ignore_conflict=False):
+    """Insert one contact for `uid`; the single definition used by the app, /api/v1/import and migrate_to_postgres."""
+    conflict = ' ON CONFLICT (id) DO NOTHING' if ignore_conflict else ''
+    cur.execute(
+        f"""
+        INSERT INTO contacts
+        (id, name, phone, email, address, tags, notes, avatar, birthday,
+         social, linked_contacts, starred, created_at, updated_at, company, title, user_id)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s){conflict}
+        """,
+        _contact_row_values(c, uid),
+    )
+
+def _clean_contact_children(cur, contact_ids):
+    """Delete reminders and activity whose contact is gone. Call after removing contacts:
+    a contact owned by someone else still exists, so its child rows survive."""
+    cur.execute("DELETE FROM reminders r WHERE r.contact_id = ANY(%s) AND NOT EXISTS (SELECT 1 FROM contacts c WHERE c.id = r.contact_id)", (contact_ids,))
+    cur.execute("DELETE FROM activities a WHERE a.contact_id = ANY(%s) AND NOT EXISTS (SELECT 1 FROM contacts c WHERE c.id = a.contact_id)", (contact_ids,))
+
 def save_contacts(contacts, uid):
     """Legacy atomic write: replace this user's contacts with the given list (used by /save_contacts and merge)."""
     conn = get_db_conn()
@@ -321,33 +385,7 @@ def save_contacts(contacts, uid):
         with conn.cursor() as cur:
             cur.execute("DELETE FROM contacts WHERE user_id = %s", (uid,))
             for c in contacts:
-                cur.execute(
-                    """
-                    INSERT INTO contacts
-                    (id, name, phone, email, address, tags, notes, avatar, birthday,
-                     social, linked_contacts, starred, created_at, updated_at, company, title, user_id)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        c.get('id'),
-                        c.get('name', ''),
-                        c.get('phone', ''),
-                        c.get('email', ''),
-                        c.get('address', ''),
-                        json.dumps(c.get('tags', [])),
-                        c.get('notes', ''),
-                        c.get('avatar', ''),
-                        c.get('birthday', ''),
-                        json.dumps(c.get('social', {})),
-                        json.dumps(c.get('linked_contacts', [])),
-                        bool(c.get('starred', False)),
-                        c.get('createdAt', datetime.now().isoformat()),
-                        c.get('updatedAt', datetime.now().isoformat()),
-                        c.get('company', ''),
-                        c.get('title', ''),
-                        uid,
-                    )
-                )
+                insert_contact(cur, c, uid)
         conn.commit()
     finally:
         conn.close()
@@ -405,24 +443,8 @@ def handle_internal_error(e):
 
 @app.route('/', methods=['GET'])
 def index():
-    # The vintage desk rolodex is the default page; the original UI is no longer served at /
+    # The vintage desk rolodex is the only frontend
     return send_from_directory(VINTAGE_DIR, 'index.html')
-
-@app.route('/app.js', methods=['GET'])
-def app_js():
-    return send_from_directory(BASE_DIR, 'app.js')
-
-@app.route('/styles.css', methods=['GET'])
-def styles_css():
-    return send_from_directory(BASE_DIR, 'styles.css')
-
-@app.route('/manifest.json', methods=['GET'])
-def manifest():
-    return send_from_directory(BASE_DIR, 'manifest.json')
-
-@app.route('/sw.js', methods=['GET'])
-def sw():
-    return send_from_directory(BASE_DIR, 'sw.js')
 
 @app.route('/vintage', methods=['GET'])
 def vintage_redirect():
@@ -737,6 +759,15 @@ def api_add_contact():
     data = request.get_json(silent=True)
     if not isinstance(data, dict) or not _text(data, 'name'):
         return jsonify({'error': 'name is required'}), 400
+    tags = _json_list(data, 'tags')
+    social = _json_object(data, 'social')
+    linked = _json_list(data, 'linked_contacts')
+    if tags is None:
+        return jsonify({'error': 'tags must be a list of strings'}), 400
+    if social is None:
+        return jsonify({'error': 'social must be an object'}), 400
+    if linked is None:
+        return jsonify({'error': 'linked_contacts must be a list of contact IDs'}), 400
 
     contact = {
         'id': _text(data, 'id') or _new_id(),
@@ -744,12 +775,12 @@ def api_add_contact():
         'phone': _text(data, 'phone'),
         'email': _text(data, 'email'),
         'address': _text(data, 'address'),
-        'tags': data.get('tags') or [],
+        'tags': tags,
         'notes': _text(data, 'notes'),
         'avatar': _text(data, 'avatar'),
         'birthday': _text(data, 'birthday'),
-        'social': data.get('social') or {},
-        'linked_contacts': data.get('linked_contacts') or [],
+        'social': social,
+        'linked_contacts': linked,
         'starred': bool(data.get('starred', False)),
         'company': _text(data, 'company'),
         'title': _text(data, 'title'),
@@ -760,33 +791,7 @@ def api_add_contact():
     conn = get_db_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO contacts
-                (id, name, phone, email, address, tags, notes, avatar, birthday,
-                 social, linked_contacts, starred, created_at, updated_at, company, title, user_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    contact['id'],
-                    contact['name'],
-                    contact['phone'],
-                    contact['email'],
-                    contact['address'],
-                    json.dumps(contact['tags']),
-                    contact['notes'],
-                    contact['avatar'],
-                    contact['birthday'],
-                    json.dumps(contact['social']),
-                    json.dumps(contact['linked_contacts']),
-                    bool(contact['starred']),
-                    contact['createdAt'],
-                    contact['updatedAt'],
-                    contact['company'],
-                    contact['title'],
-                    current_user_id(),
-                )
-            )
+            insert_contact(cur, contact, current_user_id())
         conn.commit()
     except psycopg2.IntegrityError:
         conn.rollback()
@@ -805,6 +810,13 @@ def api_update_contact(contact_id):
         return jsonify({'error': 'no data'}), 400
     if 'name' in data and not _text(data, 'name'):
         return jsonify({'error': 'name cannot be empty'}), 400
+    # Reject wrong-typed JSONB fields instead of storing a string where an array belongs
+    if 'tags' in data and _json_list(data, 'tags') is None:
+        return jsonify({'error': 'tags must be a list of strings'}), 400
+    if 'social' in data and _json_object(data, 'social') is None:
+        return jsonify({'error': 'social must be an object'}), 400
+    if 'linked_contacts' in data and _json_list(data, 'linked_contacts') is None:
+        return jsonify({'error': 'linked_contacts must be a list of contact IDs'}), 400
 
     conn = get_db_conn()
     try:
@@ -817,8 +829,12 @@ def api_update_contact(contact_id):
                           'company','title']:
                 if field in data:
                     fields.append(f"{field} = %s")
-                    if field in ('tags', 'social', 'linked_contacts'):
-                        params.append(json.dumps(data[field]))
+                    if field in ('tags', 'linked_contacts'):
+                        params.append(json.dumps(_json_list(data, field)))
+                    elif field == 'social':
+                        params.append(json.dumps(_json_object(data, field)))
+                    elif field == 'starred':
+                        params.append(bool(data['starred']))
                     else:
                         params.append(data[field])
 
@@ -851,9 +867,7 @@ def api_delete_contact(contact_id):
     try:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM contacts WHERE id = %s AND user_id = %s", (contact_id, current_user_id()))
-            # Only remove child rows whose contact is gone; a contact owned by someone else still exists
-            cur.execute("DELETE FROM reminders r WHERE r.contact_id = %s AND NOT EXISTS (SELECT 1 FROM contacts c WHERE c.id = r.contact_id)", (contact_id,))
-            cur.execute("DELETE FROM activities a WHERE a.contact_id = %s AND NOT EXISTS (SELECT 1 FROM contacts c WHERE c.id = a.contact_id)", (contact_id,))
+            _clean_contact_children(cur, [contact_id])
         conn.commit()
     finally:
         conn.close()
@@ -877,8 +891,7 @@ def api_bulk():
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             if action == 'delete':
                 cur.execute("DELETE FROM contacts WHERE id = ANY(%s) AND user_id = %s", (ids, uid))
-                cur.execute("DELETE FROM reminders r WHERE r.contact_id = ANY(%s) AND NOT EXISTS (SELECT 1 FROM contacts c WHERE c.id = r.contact_id)", (ids,))
-                cur.execute("DELETE FROM activities a WHERE a.contact_id = ANY(%s) AND NOT EXISTS (SELECT 1 FROM contacts c WHERE c.id = a.contact_id)", (ids,))
+                _clean_contact_children(cur, ids)
                 conn.commit()
                 return jsonify({'status': 'ok', 'deleted': len(ids)})
 
@@ -1063,6 +1076,8 @@ def _read_import_file(file):
                 'birthday': _csv_value(row, 'birthday', 'Birthday'),
                 'social': {},
                 'linked_contacts': [],
+                'company': _csv_value(row, 'company', 'Company'),
+                'title': _csv_value(row, 'title', 'Title'),
                 'createdAt': datetime.now().isoformat(),
                 'updatedAt': datetime.now().isoformat()
             }
@@ -1141,43 +1156,18 @@ def api_import():
     counts = _import_counts(rows)
 
     # An id held by another account is replaced with a fresh one so the import never touches their data.
+    new_count = 0
     conn = get_db_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT id FROM contacts WHERE id = ANY(%s)", ([c['id'] for c in to_add],))
-            taken_ids = {r[0] for r in cur.fetchall()}
-            new_count = 0
-            for c in to_add:
-                if c['id'] in taken_ids:
-                    c['id'] = _new_id()
-                cur.execute(
-                    """
-                    INSERT INTO contacts
-                    (id, name, phone, email, address, tags, notes, avatar, birthday,
-                     social, linked_contacts, starred, created_at, updated_at, company, title, user_id)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        c['id'],
-                        c.get('name', ''),
-                        c.get('phone', ''),
-                        c.get('email', ''),
-                        c.get('address', ''),
-                        json.dumps(c.get('tags', [])),
-                        c.get('notes', ''),
-                        c.get('avatar', ''),
-                        c.get('birthday', ''),
-                        json.dumps(c.get('social', {})),
-                        json.dumps(c.get('linked_contacts', [])),
-                        bool(c.get('starred', False)),
-                        c.get('createdAt', datetime.now().isoformat()),
-                        c.get('updatedAt', datetime.now().isoformat()),
-                        c.get('company', ''),
-                        c.get('title', ''),
-                        uid,
-                    )
-                )
-                new_count += 1
+            if to_add:
+                cur.execute("SELECT id FROM contacts WHERE id = ANY(%s)", ([c['id'] for c in to_add],))
+                taken_ids = {r[0] for r in cur.fetchall()}
+                for c in to_add:
+                    if c['id'] in taken_ids:
+                        c['id'] = _new_id()
+                    insert_contact(cur, c, uid)
+                    new_count += 1
         conn.commit()
     except Exception as e:
         conn.rollback()
@@ -1202,17 +1192,21 @@ def parse_vcard(content):
         # Handle folded lines (starts with space or tab) — append to previous line
         if raw_line.startswith(' ') or raw_line.startswith('\t'):
             if current and current.get('_last_key'):
-                current[current['_last_key']] += raw_line.strip()
+                current[current['_last_key']] += raw_line.lstrip(' \t\r\n')
             continue
 
-        line = raw_line.strip()
+        line = raw_line.strip('\r\n')
+        if not line.strip():
+            if current is not None:
+                current['_last_key'] = None
+            continue
 
         if line.startswith('BEGIN:VCARD'):
             current = {
                 'id': _new_id(),
                 'name': '', 'phone': '', 'email': '', 'address': '',
                 'tags': [], 'notes': '', 'avatar': '', 'birthday': '',
-                'social': {}, 'linked_contacts': [],
+                'social': {}, 'linked_contacts': [], 'company': '', 'title': '',
                 'createdAt': datetime.now().isoformat(),
                 'updatedAt': datetime.now().isoformat(),
                 '_last_key': None
@@ -1244,6 +1238,13 @@ def parse_vcard(content):
                 if val and not current['email']:
                     current['email'] = val
                 current['_last_key'] = 'email'
+            elif line.startswith('ORG:') and not current['company']:
+                # ORG:Company;Department — the first component is the company
+                current['company'] = line[4:].split(';')[0].strip()
+                current['_last_key'] = 'company'
+            elif line.startswith('TITLE:') and not current['title']:
+                current['title'] = line[6:].strip()
+                current['_last_key'] = 'title'
             elif line.startswith('ADR'):
                 val = line.split(':', 1)[1].strip() if ':' in line else line
                 if val and not current['address']:
@@ -1280,16 +1281,18 @@ def parse_vcard(content):
 def export_csv(contacts):
     """Export selected contacts as CSV."""
     output = io.StringIO()
-    fieldnames = ['name', 'phone', 'email', 'address', 'tags', 'notes', 'birthday']
+    fieldnames = ['name', 'company', 'title', 'phone', 'email', 'address', 'tags', 'notes', 'birthday']
     writer = csv.DictWriter(output, fieldnames=fieldnames)
     writer.writeheader()
     for c in contacts:
         writer.writerow({
             'name': c.get('name',''),
+            'company': c.get('company',''),
+            'title': c.get('title',''),
             'phone': c.get('phone',''),
             'email': c.get('email',''),
             'address': c.get('address',''),
-            'tags': ', '.join(c.get('tags',[])),
+            'tags': ', '.join(c.get('tags',[]) or []),
             'notes': c.get('notes',''),
             'birthday': c.get('birthday','')
         })
@@ -1305,24 +1308,47 @@ def export_vcard(contacts):
         lines.append('BEGIN:VCARD')
         lines.append('VERSION:3.0')
         lines.append(f"FN:{c.get('name','')}")
+        if c.get('company'):
+            lines.append(f"ORG:{c.get('company','')}")
+        if c.get('title'):
+            lines.append(f"TITLE:{c.get('title','')}")
         if c.get('phone'):
             lines.append(f"TEL:{c.get('phone','')}")
         if c.get('email'):
             lines.append(f"EMAIL:{c.get('email','')}")
         if c.get('address'):
-            lines.append(f"ADR:{c.get('address','')}")
+            # ADR components: post office box; extended; street; locality; region; postal code; country.
+            # The flat stored address goes in the street component so other address books keep it.
+            lines.append(f"ADR:;;{c.get('address','')};;;;")
         if c.get('birthday'):
             lines.append(f"BDAY:{c.get('birthday','')}")
         if c.get('notes'):
-            # Fold long notes
-            note = c['notes'].replace('\n', '\\n')
-            lines.append(f"NOTE:{note}")
+            note = c['notes'].replace('\\', '\\\\').replace('\n', '\\n').replace(',', '\\,').replace(';', '\\;')
+            lines.extend(_fold_vcard_line(f"NOTE:{note}"))
         lines.append('END:VCARD')
         lines.append('')
 
-    mem = io.BytesIO('\n'.join(lines).encode('utf-8'))
+    mem = io.BytesIO('\r\n'.join(lines).encode('utf-8'))
     return send_file(mem, mimetype='text/vcard', as_attachment=True,
                      download_name='rolodex_contacts.vcf')
+
+def _fold_vcard_line(line):
+    """Fold a content line to 75 octets as vCard 3.0 requires; continuation lines start with a space."""
+    if len(line.encode('utf-8')) <= 75:
+        return [line]
+    folded, current, current_octets = [], line[0], len(line[0].encode('utf-8'))
+    for ch in line[1:]:
+        octets = len(ch.encode('utf-8'))
+        limit = 74 if folded else 75  # continuation lines carry a leading space
+        if current_octets + octets > limit:
+            folded.append(current)
+            current, current_octets = ' ' + ch, 1 + octets
+        else:
+            current += ch
+            current_octets += octets
+    if current.strip():
+        folded.append(current)
+    return folded
 
 # ── Tags discovery ──────────────────────────────────────────────────────
 
@@ -1353,6 +1379,10 @@ def api_tags():
 
 # ── Merge ──────────────────────────────────────────────────────────────
 
+# Contact fields a merge may touch; /api/v1/merge silently drops anything else (including id)
+MERGEABLE_FIELDS = ['name', 'phone', 'email', 'address', 'tags', 'notes', 'avatar',
+                    'birthday', 'social', 'linked_contacts', 'company', 'title']
+
 @app.route('/api/v1/merge', methods=['POST'])
 @login_required
 def api_merge():
@@ -1374,7 +1404,7 @@ def api_merge():
     # Field-level merge. By default secondary's non-empty values win for specified fields.
     # keep_existing: primary's values win and secondary only fills blanks (notes are appended).
     keep_existing = bool(data.get('keep_existing'))
-    merge_fields = data.get('fields', ['name', 'phone', 'email', 'address', 'tags', 'notes', 'avatar', 'birthday', 'social', 'company', 'title'])
+    merge_fields = [f for f in data.get('fields', MERGEABLE_FIELDS) if f in MERGEABLE_FIELDS]
     for field in merge_fields:
         if field == 'tags':
             # Merge tags from both, deduplicate
