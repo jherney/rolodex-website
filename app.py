@@ -476,7 +476,8 @@ def vintage(path):
 
 # ── Accounts ────────────────────────────────────────────────────────────
 
-_EMAIL_RE = re.compile(r'^[^\s@]+@[^\s@]+\.[^\s@]+$')
+# Domain labels exclude '.', so the match is unambiguous and runs in linear time
+_EMAIL_RE = re.compile(r'^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$')
 
 def _password_from(data):
     return data.get('password') if isinstance(data.get('password'), str) else ''
