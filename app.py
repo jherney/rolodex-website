@@ -937,19 +937,19 @@ def api_bulk():
                 return jsonify({'status': 'ok', 'untagged': tag})
 
             elif action == 'export':
+                fmt = data.get('format', 'json')
+                if fmt not in ('json', 'csv', 'vcard'):
+                    return jsonify({'error': 'unknown export format; use json, csv or vcard'}), 400
                 cur.execute(
                     "SELECT * FROM contacts WHERE id = ANY(%s) AND user_id = %s",
                     (ids, uid)
                 )
-                rows = cur.fetchall()
-                selected = [_row_to_dict(r) for r in rows]
-                fmt = data.get('format', 'json')
+                selected = [_row_to_dict(r) for r in cur.fetchall()]
                 if fmt == 'csv':
                     return export_csv(selected)
-                elif fmt == 'vcard':
+                if fmt == 'vcard':
                     return export_vcard(selected)
-                else:
-                    return jsonify(selected)
+                return jsonify(selected)
 
             else:
                 return jsonify({'error': 'unknown action'}), 400
