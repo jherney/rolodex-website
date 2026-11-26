@@ -75,7 +75,8 @@ DB_CONFIG = {
     'port': int(os.environ.get('ROLODEX_DB_PORT', '5432')),
     'dbname': os.environ.get('ROLODEX_DB_NAME', 'rolodex'),
     'user': os.environ.get('ROLODEX_DB_USER', 'rolodex'),
-    'password': os.environ.get('ROLODEX_DB_PASSWORD', 'rolodex123'),
+    # No built-in default: unset, libpq falls back to PGPASSWORD or ~/.pgpass
+    'password': os.environ.get('ROLODEX_DB_PASSWORD'),
 }
 
 def _set_cors_headers(response):

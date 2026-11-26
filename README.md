@@ -39,7 +39,7 @@ DATABASE_URL=postgresql://user:pass@localhost:5432/rolodex ROLODEX_DEBUG=1 pytho
 # Open http://localhost:5000
 ```
 
-Without `DATABASE_URL` it connects with the `ROLODEX_DB_*` settings below (default `rolodex:rolodex123@localhost:5432/rolodex`). If it can't connect, startup ends with one line naming the host and port it tried.
+Without `DATABASE_URL` it connects with the `ROLODEX_DB_*` settings below (default `rolodex@localhost:5432/rolodex`; set `ROLODEX_DB_PASSWORD`, or libpq reads `PGPASSWORD` and `~/.pgpass`). If it can't connect, startup ends with one line naming the host and port it tried.
 
 ## Running it for real
 
@@ -84,7 +84,7 @@ Sign-in cookies are signed with `ROLODEX_SECRET_KEY`. If you don't set it (local
 | `ROLODEX_DB_PORT` | `5432` | Postgres port |
 | `ROLODEX_DB_NAME` | `rolodex` | Database name |
 | `ROLODEX_DB_USER` | `rolodex` | Database user |
-| `ROLODEX_DB_PASSWORD` | `rolodex123` | Database password; change it anywhere real |
+| `ROLODEX_DB_PASSWORD` | unset | Database password. No built-in default: unset, libpq uses `PGPASSWORD` or `~/.pgpass`. The bundled Compose stack sets its own dev value |
 | `ROLODEX_VINTAGE_DIR` | `./vintage-rolodex` | Folder the UI is served from (`/app/vintage` in the image) |
 | `ROLODEX_WORKERS` | CPU cores × 2 + 1 | Gunicorn workers (`4` in Compose) |
 | `ROLODEX_TIMEOUT` | `30` | Gunicorn worker timeout, seconds |
