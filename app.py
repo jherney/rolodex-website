@@ -123,6 +123,23 @@ def handle_options():
     if request.method == 'OPTIONS':
         return _set_cors_headers(app.make_response(''))
 
+@app.before_request
+def block_cross_site_writes():
+    # CSRF defence in depth on top of the SameSite=Lax session cookie, which still lets a
+    # sibling subdomain through. Browsers label every request; clients that send neither
+    # header (curl, scripts) are not a CSRF vector and pass.
+    if request.method in ('GET', 'HEAD', 'OPTIONS'):
+        return None
+    origin = request.headers.get('Origin')
+    if origin and CORS_ORIGIN and origin == CORS_ORIGIN:
+        return None  # the one origin the operator allowed
+    cross_site = request.headers.get('Sec-Fetch-Site', 'same-origin') not in ('same-origin', 'none')
+    if origin:
+        cross_site = cross_site or urllib.parse.urlsplit(origin).netloc != request.host
+    if cross_site:
+        return jsonify({'error': 'cross-site request blocked'}), 403
+    return None
+
 # ── Database helpers ───────────────────────────────────────────────────
 
 # Hosted Postgres integrations on Vercel set POSTGRES_URL (Supabase) or DATABASE_URL (Neon)

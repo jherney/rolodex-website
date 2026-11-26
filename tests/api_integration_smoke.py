@@ -342,6 +342,24 @@ def main():
             assert 'unknown export format' in export(bad, expect=400)['error'], bad
     test('POST /api/v1/bulk export accepts json/csv/vcard/vcf and rejects other formats', bulk_export_formats)
 
+    def cross_site_writes_blocked():
+        def post(headers):
+            req = urllib.request.Request(BASE + '/api/v1/bulk', method='POST',
+                                         data=json.dumps({'action': 'export', 'ids': [bulk_contact_id]}).encode(),
+                                         headers={'Content-Type': 'application/json', **headers})
+            try:
+                with OPENER.open(req, timeout=10) as resp:
+                    return resp.status
+            except urllib.error.HTTPError as e:
+                return e.code
+        assert_equal(post({'Origin': 'http://evil.example'}), 403)
+        assert_equal(post({'Origin': 'null'}), 403)
+        assert_equal(post({'Sec-Fetch-Site': 'cross-site'}), 403)
+        assert_equal(post({'Sec-Fetch-Site': 'same-site'}), 403)
+        assert_equal(post({'Origin': BASE, 'Sec-Fetch-Site': 'same-origin'}), 200)
+        assert_equal(post({}), 200)
+    test('cross-site POSTs are rejected, same-origin and header-less ones pass', cross_site_writes_blocked)
+
     def bulk_delete():
         result = request('POST', '/api/v1/bulk', {'action': 'delete', 'ids': [bulk_contact_id]})
         assert_equal(result['status'], 'ok')
