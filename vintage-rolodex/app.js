@@ -295,7 +295,7 @@
     return s;
   }
 
-  function copyText(node) {
+  async function copyText(node) {
     const text = node.textContent;
     const done = () => toast(`Copied ${node.dataset.what}: ${text}`);
     const fallback = () => {
@@ -307,8 +307,12 @@
       toast('Selected. Press Ctrl+C to copy.');
     };
     try {
-      navigator.clipboard.writeText(text).then(done, fallback);
-    } catch { fallback(); }
+      await navigator.clipboard.writeText(text);
+    } catch {
+      fallback();
+      return;
+    }
+    done();
   }
 
   function renderCard(c, isFirstOfLetter) {
