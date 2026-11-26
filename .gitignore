@@ -32,3 +32,6 @@ rolodex-cache/
 
 # graphify output
 graphify-out/
+
+# graphify merge-driver config, local only
+.gitattributes
