@@ -938,8 +938,10 @@ def api_bulk():
 
             elif action == 'export':
                 fmt = data.get('format', 'json')
+                if fmt == 'vcf':
+                    fmt = 'vcard'
                 if fmt not in ('json', 'csv', 'vcard'):
-                    return jsonify({'error': 'unknown export format; use json, csv or vcard'}), 400
+                    return jsonify({'error': 'unknown export format; use json, csv, vcard or vcf'}), 400
                 cur.execute(
                     "SELECT * FROM contacts WHERE id = ANY(%s) AND user_id = %s",
                     (ids, uid)

@@ -124,7 +124,7 @@ curl -s -b jar -H 'Content-Type: application/json' -d '{"name":"Ada Lovelace","e
 | GET | `/api/v1/tags` | Tags with counts |
 | GET | `/api/v1/duplicates` | Possible duplicate pairs (`?threshold=0.7`) |
 | POST | `/api/v1/merge` | Merge `secondary_id` into `primary_id`; `keep_existing: true` keeps the primary's values |
-| POST | `/api/v1/bulk` | `action`: `delete`, `tag`, `untag` or `export` over `ids` |
+| POST | `/api/v1/bulk` | `action`: `delete`, `tag`, `untag` or `export` over `ids`; `export` takes `format`: `json` (default), `csv` or `vcard` (alias `vcf`), anything else is a 400 |
 | POST | `/api/v1/import/preview` | Report each row of a JSON/CSV/vCard file as new, possible duplicate or skipped; writes nothing |
 | POST | `/api/v1/import` | Import a JSON/CSV/vCard file, skipping contacts you already have |
 | GET/POST | `/api/v1/contacts/:id/reminders` | List or add reminders (`title`, `due_date`) |

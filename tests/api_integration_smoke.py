@@ -327,6 +327,21 @@ def main():
         assert_equal(result['tagged'], 'bulk-test')
     test('POST /api/v1/bulk tag works', bulk_tag)
 
+    def bulk_export_formats():
+        def export(fmt, expect=200):
+            body = {'action': 'export', 'ids': [bulk_contact_id]}
+            if fmt is not None:
+                body['format'] = fmt
+            return request('POST', '/api/v1/bulk', body, expect=expect)
+        assert_equal(export(None)[0]['id'], bulk_contact_id)
+        assert_equal(export('json')[0]['id'], bulk_contact_id)
+        assert 'Bulk Test Contact' in export('csv')
+        for fmt in ('vcard', 'vcf'):
+            assert 'FN:Bulk Test Contact' in export(fmt), fmt
+        for bad in ('xml', '', ['csv']):
+            assert 'unknown export format' in export(bad, expect=400)['error'], bad
+    test('POST /api/v1/bulk export accepts json/csv/vcard/vcf and rejects other formats', bulk_export_formats)
+
     def bulk_delete():
         result = request('POST', '/api/v1/bulk', {'action': 'delete', 'ids': [bulk_contact_id]})
         assert_equal(result['status'], 'ok')

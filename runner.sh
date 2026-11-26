@@ -84,6 +84,10 @@ run_smoke() {
   local url rc=0
   url="$(base_url)" || result_fail smoke 3 "no running stack for this checkout; start one with ./runner.sh up"
   BASE_URL="$url" "$PY" "$ROOT_DIR/tests/api_integration_smoke.py" || rc=$?
+  # The suite exhausts this address's sign-up throttle on purpose; clear it so the stack can be
+  # used by hand (the counter lives in the database and survives an app restart).
+  compose exec -T db psql -U "${ROLODEX_DB_USER:-rolodex}" -d "${ROLODEX_DB_NAME:-rolodex}" -Atc \
+    "DELETE FROM login_failures WHERE key LIKE 'signup-ip:%'" >/dev/null 2>&1 || true
   case "$rc" in
     0) ;;
     2) result_fail smoke 3 "the smoke tests found no server at $url; check: docker compose -p $PROJECT ps" ;;
