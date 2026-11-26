@@ -580,7 +580,7 @@
     if (idx < 0) return;
     if (idx !== Math.round(pos)) return goTo(idx);
     const hit = [...cardEls[idx].querySelectorAll('.copy')].find((n) => inside(e, n.getBoundingClientRect()));
-    if (hit) copyText(hit);
+    if (hit) void copyText(hit);
   }
 
   stage.addEventListener('dblclick', (e) => {
